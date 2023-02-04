@@ -11,5 +11,6 @@ class InteractiveGame(DecisionFunctionGame):
     def __init__(self):
         super().__init__(Interactive())
 
-game = InteractiveGame()
-game.play()
+if __name__ == "__main__":
+    game = InteractiveGame()
+    game.play()
