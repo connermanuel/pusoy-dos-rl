@@ -22,14 +22,9 @@ class Game():
         
         self.played_cards = [torch.zeros(52)] * 4
 
-        cards = np.arange(52)
-        np.random.shuffle(cards)
+        cards = torch.randperm(52)
         for idx, p in enumerate(self.players):
             p.cards[cards[idx*13: (idx+1)*13]] = 1
-        if debug:
-            for p in self.players:
-                print(f"Player {p.number} starts with:")
-                print_cards(p.cards)
         
         self.is_first_move = True
         self.finished = False
@@ -90,39 +85,3 @@ class Game():
     def init_from_decision_functions(decision_functions):
         players = [Player(None, i, decision_function) for i, decision_function in zip(range(4), decision_functions)]
         return Game(players)
-
-class DecisionFunctionGame(Game):
-    def __init__(self, decision_function, debug=False):
-        players = [Player(self, i, decision_function) for i in range(4)]
-        super().__init__(players, debug=debug)
-
-class DummyGame(DecisionFunctionGame):
-    def __init__(self):
-        super().__init__(None)
-
-class InteractiveGame(DecisionFunctionGame):
-    def __init__(self):
-        super().__init__(Interactive())
-
-class DummyGame(DecisionFunctionGame):
-    def __init__(self):
-        super().__init__(Neural(DumbModel()), debug=True)
-    
-class DummyInteractiveNeuralGame(Game):
-    def __init__(self):
-        you = Player(self, 0, Interactive())
-        adversaries = [Player(self, i, Neural(DumbModel())) for i in range(1, 4)]
-        players = [you] + adversaries
-        super().__init__(players)
-
-class DummyInteractiveNeuralTrainingGame(Game):
-    def __init__(self, path):
-        you = Player(self, 0, Interactive())
-        if path:
-            adversaries = [Player(self, i, TrainingDecisionFunction(DumbModel())) for i in range(1, 4)]
-        else:
-            model = D2RLA2C()
-            model.load_state_dict(torch.load(path))
-            adversaries = [Player(self, i, Neural(model)) for i in range(1, 4)]
-        players = [you] + adversaries
-        super().__init__(players)
