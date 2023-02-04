@@ -130,7 +130,7 @@ class Neural(DecisionFunction):
         self.input = input
 
         # Feed input through NN, and filter output by available cards
-        output = self.model(input) + 1e-8
+        output = self.model.actor(input) + 1e-8
         output[:52] = F.softmax(output[:52], dim=0)
         output[52:57] = F.softmax(output[52:57], dim=0)
         output[57:] = F.softmax(output[57:], dim=0)
@@ -155,12 +155,6 @@ class Neural(DecisionFunction):
         raise ValueError('No possible actions found!')
     
     def find_best_single(self, output, card_list, prev_play, hand_type, is_pending, is_first_move):
-        # print("You called best single!")
-        # print(f"Here is the output: {output}")
-        # print(f"Here is the card list:")
-        # print(card_list)
-        # print(f"Is pending: {is_pending}")
-        # print(f"Is first move: {is_first_move}")
         if not torch.any(card_list):
             return None
         cards = torch.zeros(52)
@@ -452,7 +446,7 @@ class TrainingDecisionFunction(Neural):
                 print(probs)
             return torch.multinomial(probs, num_samples)
         except RuntimeError as e:
-            output = self.model(self.input)
+            output = self.model.actor(self.input)
             cloned = output.clone()
             output[:52] = F.softmax(output[:52], dim=0)
             output[52:57] = F.softmax(output[52:57], dim=0)

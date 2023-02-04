@@ -1,6 +1,6 @@
 from pusoy.game import Game
 from pusoy.player import Player
-from pusoy.models import D2RLA2C
+from pusoy.models import D2RL, D2RLAC, D2RLA2C, D2RLAQC, D2RLA2QC
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.losses import ppo_loss
 
@@ -14,8 +14,8 @@ import joblib
 import copy
 
 def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, batch_size: int=20, 
-          experience_replay_mult: int=4, lr: float=0.001, eps: float=0.1, gamma: float=0.99, 
-          pool_size: int=4, save_steps: int=500, device: str='cuda'):
+          experience_replay_mult: int=4, lr_actor: float=0.001, lr_critic: float=0.001, eps: float=0.1, 
+          gamma: float=0.99, alpha: float=0.001, pool_size: int=4, save_steps: int=500, device: str='cuda', model_dir=None):
     """
     Trains curr_model using self-play.
 
@@ -26,26 +26,36 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     epochs -- training epochs
     batch_size -- number of games to play in each epoch
     experience_replay_mult -- sets experience replay size to (batch_size * experience replay mult)
-    lr -- learning rate
+    lr_actor -- learning rate for actor
+    lr_critic -- learning rate for critic
     eps -- epsilon for loss function clipping    
     gamma -- discount factor for rewards
+    alpha -- entropy factor
     pool_size -- number of processes to spawn
     save_steps -- number of steps to take before saving
     device -- device to perform operations on
+    model_dir -- where to save the models
     """
     torch.autograd.set_detect_anomaly(True)
     experience_replay_size = batch_size * experience_replay_mult
 
     prev_model = copy.deepcopy(curr_model)
     models = [prev_model]
+    curr_model.to(device)
+    prev_model.to(device)
 
-    model_dir = f"./models_{lr}"
+    if model_dir is None:
+        model_dir = f"./models_a{lr_actor}_c{lr_critic}"
     if not os.path.exists(model_dir):
         os.mkdir(model_dir)
     
-    curr_model.to(device)
-    prev_model.to(device)
-    opt = torch.optim.Adam(curr_model.parameters(), lr=lr)
+    if curr_model.critic:
+        opt = torch.optim.Adam([
+            {'params': curr_model.actor.parameters(), 'lr': lr_actor},
+            {'params': curr_model.critic.parameters(), 'lr': lr_critic}
+        ])
+    else:
+        opt = torch.optim.Adam(curr_model.parameters(), lr_actor)
 
     total_winning_actions = []
     total_losing_actions = []
@@ -98,7 +108,8 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
         rewards = torch.concat([win_rewards, lose_rewards])
 
         # print(f'Training on winning actions...')
-        loss = ppo_loss(curr_model, prev_model, inputs, actions, rewards, eps_clip=eps, device=device)
+        loss = ppo_loss(curr_model, prev_model, inputs, actions, rewards, eps_clip=eps, 
+                        gamma=gamma, alpha=alpha, device=device)
         opt.zero_grad()
         try:
             loss.backward()
@@ -158,9 +169,7 @@ def play_round(
 
 if __name__ == "__main__":
     set_start_method("spawn")
-    model = D2RLA2C()
     # model.load_state_dict(torch.load(f'models/500.pt')) 
-    
     parser = argparse.ArgumentParser(description="Train PUSOY model.")
     
     parser.add_argument("-p", "--pool_size", 
@@ -175,7 +184,25 @@ if __name__ == "__main__":
     parser.add_argument("--er_mult",
         help="Experience replay mult. Defaults to 4.",
         type=int, default=4)
+    parser.add_argument("-m", "--model",
+        help="Model architecture to train. Defaults to A2C.",
+        options=["base", "ac", "a2c", "aqc", "a2qc"],
+        type=str, default="a2c")
+    parser.add_argument("-m", "--model",
+        help="Model architecture to train. Defaults to A2C.",
+        options=["base", "ac", "a2c", "aqc", "a2qc"],
+        type=str, default="a2c")
     
+    model_dispatch = {
+        "base": D2RL,
+        "ac": D2RLAC,
+        "a2c": D2RLA2C,
+        "aqc": D2RLAQC,
+        "a2qc": D2RLA2QC
+    }
+
     args = parser.parse_args()
+    ModelClass = args.model
+    model = ModelClass()
 
     train(model, lr=args.lr, batch_size=args.batch_size, pool_size=args.pool_size, epochs=1000)

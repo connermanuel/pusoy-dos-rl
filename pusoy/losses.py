@@ -22,8 +22,8 @@ def ppo_loss(curr_model: torch.nn.Module, prev_model: torch.nn.Module, inputs: L
     - device: str -- device to perform operations on
     """
     input = torch.stack(inputs)
-    output = curr_model(input)
-    prev_output = prev_model(input).detach()
+    output = curr_model.actor(input)
+    prev_output = prev_model.actor(input).detach()
     curr_log_probs = logits_to_log_probs(output, SOFTMAX_SIZES, device)
     prev_log_probs = logits_to_log_probs(prev_output, SOFTMAX_SIZES, device)
 

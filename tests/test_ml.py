@@ -33,7 +33,7 @@ def test_loss(model):
         prev_model = copy.deepcopy(model)
         input = torch.ones((330,))
         opt = torch.optim.SGD(curr_model.parameters(), lr=0.01)
-        base = prev_model(input).clone()
+        base = prev_model.actor(input).clone()
 
         # Create a dummy action that plays a single random card
         idx = torch.randint(52, (1,)).item()
@@ -54,7 +54,7 @@ def test_loss(model):
             loss.sum().backward()
             opt.step()
 
-        new_output = curr_model(input)
+        new_output = curr_model.actor(input)
         new_output = logits_to_log_probs(new_output[None, ...]).flatten()
         base = logits_to_log_probs(base[None, ...]).flatten()
 
