@@ -37,7 +37,7 @@ def test_find_pairs_base(nn):
     hand_type = torch.zeros(5)
     is_pending = 1
 
-    best_pair = nn.find_best_pair(output, card_list, prev_play, hand_type, is_pending)
+    best_pair = nn.find_best_pair(output, card_list, prev_play, hand_type, is_pending, 0)
     assert all(best_pair.cards == output[:52])
 
 def test_find_pairs_with_prev_play(nn):
@@ -53,7 +53,7 @@ def test_find_pairs_with_prev_play(nn):
     hand_type = torch.zeros(5)
     is_pending = 0
 
-    best_pair = nn.find_best_pair(output, card_list, prev_play, hand_type, is_pending)
+    best_pair = nn.find_best_pair(output, card_list, prev_play, hand_type, is_pending, 0)
     if best_pair:
         print(best_pair.cards)
     assert best_pair is None
@@ -75,7 +75,7 @@ def test_play_pairs_with_prev_play():
     rigged_model = Neural(RiggedModel(output))
 
     resulting_action = rigged_model.play(
-        curr_player, card_list, round_type, hand_type, prev_play, prev_player, played_cards
+        curr_player, card_list, round_type, hand_type, prev_play, prev_player, played_cards, 0
     )
 
     assert all(resulting_action.cards == card_list[:52])

@@ -1,50 +1,32 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pusoy.losses import identity, state_value, q_value, state_value_advantage, q_value_advantage
 
 class DumbModel(torch.nn.Module):
+    """
+    Baseline dumb model. For testing only.
+    """
     def __init__(self):
         super().__init__()
         self.layer_1 = nn.Linear(330, 62)
+        self.adv_func = identity
     
     def forward(self, x):
         return self.layer_1(x) # Returns logits
 
-class BaseModel(torch.nn.Module):
-    def __init__(self):
+class D2RL(torch.nn.Module):
+    """
+    Model that uses D2RL architecture to produce an action.
+    Winning actions are given positive reward.
+    """
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
         super().__init__()
-        layer_1 = nn.Linear(330, 128)
-        layer_2 = nn.Linear(128, 128)
-        layer_3 = nn.Linear(128, 128)
-        layer_4 = nn.Linear(128, 62)
-        self.layer = nn.Sequential(
-            layer_1,
-            nn.Tanh(),
-            layer_2,
-            nn.Tanh(),
-            layer_3,
-            nn.Tanh(),
-            layer_4
-        )
-        torch.nn.init.xavier_uniform_(layer_1.weight)
-        torch.nn.init.xavier_uniform_(layer_2.weight)
-        torch.nn.init.xavier_uniform_(layer_3.weight)
-        torch.nn.init.xavier_uniform_(layer_4.weight)
-
-        with torch.no_grad():
-            layer_4.weight /= 100
-    
-    def forward(self, x):
-        return self.layer(x)
-
-class D2RLModel(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.layer_1 = nn.Linear(330, 128)
-        self.layer_2 = nn.Linear(330+128, 128)
-        self.layer_3 = nn.Linear(330+128, 128)
-        self.layer_4 = nn.Linear(330+128, 128)
-        self.out_layer = nn.Linear(128, 62)
+        self.layer_1 = nn.Linear(input_dim, hidden_dim)
+        self.layer_2 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.layer_3 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.layer_4 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.out_layer = nn.Linear(hidden_dim, output_dim)
 
         torch.nn.init.xavier_uniform_(self.layer_1.weight)
         torch.nn.init.xavier_uniform_(self.layer_2.weight)
@@ -54,6 +36,8 @@ class D2RLModel(torch.nn.Module):
 
         with torch.no_grad():
             self.out_layer.weight /= 100
+        
+        self.adv_func = identity
     
     def forward(self, state):
         x = F.relu(self.layer_1(state))
@@ -66,26 +50,53 @@ class D2RLModel(torch.nn.Module):
 
         return self.out_layer(x)
 
-class D2RLModelWithCritic(D2RLModel):
-    def __init__(self):
-        super().__init__()
+class D2RLAC(D2RL):
+    """
+    Model that uses D2RL architecture to produce an action.
+    Critic evaluates how good a state is.
+    Actions that lead to good states are given rewards.
+    """
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
+        super().__init__(hidden_dim, input_dim, output_dim)
         self.critic = nn.Sequential(
-            nn.Linear(330, 64),
+            nn.Linear(input_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(64, 64),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(64, 1)
+            nn.Linear(hidden_dim, 1)
         )
-        self.MSELoss = nn.MSELoss()
+        self.adv_func = state_value
 
-class D2RLModelWithQValueCritic(D2RLModel):
-    def __init__(self):
-        super().__init__()
+class D2RLA2C(D2RLAC):
+    """
+    Uses advantage in its reward function instead of state value.
+    """
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
+        super().__init__(hidden_dim, input_dim, output_dim)
+        self.adv_func = state_value_advantage
+
+class D2RLAQC(D2RL):
+    """
+    Model that uses D2RL architecture to produce an action.
+    Critic evaluates how good an action is directly.
+    Actions that produce winning conditions are given rewards.
+    """
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
+        super().__init__(hidden_dim, input_dim, output_dim)
         self.critic = nn.Sequential(
-            nn.Linear(330+62, 64),
+            nn.Linear(input_dim + output_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(64, 64),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(64, 1)
+            nn.Linear(hidden_dim, 1)
         )
-        self.MSELoss = nn.MSELoss()
+        self.adv_func = q_value
+
+
+class D2RLA2QC(D2RLAC):
+    """
+    Uses advantage in its reward function instead of state value.
+    """
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
+        super().__init__(hidden_dim, input_dim, output_dim)
+        self.adv_func = q_value_advantage

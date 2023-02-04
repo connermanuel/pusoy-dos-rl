@@ -1,93 +1,71 @@
 import torch
 import torch.nn.functional as F
+from typing import List
+from action import Action
 
-def batch_loss(curr_model, prev_model, inputs, actions, adv, eps_clip=0.1, device='cuda'):
+SOFTMAX_SIZES = [52, 5, 5]
+
+def ppo_loss(curr_model: torch.nn.Module, prev_model: torch.nn.Module, inputs: List[torch.tensor], 
+            actions: List[Action], rewards: torch.tensor, eps_clip: float=0.1, 
+            gamma: float=0.99, alpha: float=0.001, device: str='cuda'):
     """
-    Returns negated loss (positive action should have negative loss) of a batch of inputs and actions.
+    Returns negated reward (positive action should have negative loss) of a batch of inputs and actions.
     Args:
     - curr_model: Model -- the current model
     - prev_model: Model -- the previous model
     - inputs: list[torch.tensor] -- (batch_size, input_dim) the input to the model representing the game state
-    - actions: list[Action] -- (batch_size, action_dim) list of actions taken by the model using the output
-    - adv: int -- 1 if the model won the game, and -1/3 if the model lost
+    - actions: list[Action] -- list of actions taken by the model using the output
+    - rewards: torch.tensor -- tensor of rewards corresponding to each input + action
+    - eps_clip: float -- epsilon for clipping gradient update
+    - gamma: float -- discount factor
+    - alpha: float -- weight of entropy term (higher alpha = more exploration)
+    - device: str -- device to perform operations on
     """
-    softmax_sizes = [52, 5, 5]
     input = torch.stack(inputs)
     output = curr_model(input)
     prev_output = prev_model(input).detach()
-    curr_log_probs = logits_to_log_probs(output, softmax_sizes, device)
-    prev_log_probs = logits_to_log_probs(prev_output, softmax_sizes, device)
-    
-    ratios = torch.exp(curr_log_probs - prev_log_probs)
+    curr_log_probs = logits_to_log_probs(output, SOFTMAX_SIZES, device)
+    prev_log_probs = logits_to_log_probs(prev_output, SOFTMAX_SIZES, device)
 
+    ratios = torch.exp(curr_log_probs - prev_log_probs)
     batch_mask = batch_generate_mask(actions)
     ratios = ratios * batch_mask.to(device)
 
+    adv, critic_loss = curr_model.adv_func(curr_model, input, batch_mask, gamma, rewards, device)
     surr1 = ratios * adv
     surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * adv
 
-    return -torch.min(surr1, surr2) - 0.01 * entropy(curr_log_probs, softmax_sizes)
+    return -torch.min(surr1, surr2).mean(dim=1).sum() + critic_loss - alpha * entropy(curr_log_probs, SOFTMAX_SIZES)
 
-def batch_loss_with_critic(curr_model, prev_model, inputs, actions, adv, eps_clip=0.1, gamma=0.2, device='cuda'):
-    """
-    Returns negated loss (positive action should have negative loss) of a batch of inputs and actions.
-    Args:
-    - curr_model: Model -- the current model
-    - prev_model: Model -- the previous model
-    - inputs: list[torch.tensor] -- (batch_size, input_dim) the input to the model representing the game state
-    - actions: list[Action] -- (batch_size, action_dim) list of actions taken by the model using the output
-    - adv: int -- 1 if the model won the game, and -1/3 if the model lost
-    """
-    softmax_sizes = [52, 5, 5]
-    input = torch.stack(inputs)
-    output = curr_model(input)
-    prev_output = prev_model(input).detach()
-    curr_log_probs = logits_to_log_probs(output, softmax_sizes, device)
-    prev_log_probs = logits_to_log_probs(prev_output, softmax_sizes, device)
-    
-    ratios = torch.exp(curr_log_probs - prev_log_probs)
+### Advantage Functions
+def identity(curr_model, input, batch_mask, gamma, rewards, device):
+    return rewards, 0
 
-    batch_mask = batch_generate_mask(actions)
-    ratios = ratios * batch_mask.to(device)
+def state_value(curr_model, input, batch_mask, gamma, rewards, device):
+    state_values = curr_model.critic(input)
+    return state_values, F.mse_loss(state_values, rewards)
 
+def q_value(curr_model, input, batch_mask, gamma, rewards, device):
+    q_values = curr_model.critic(torch.hstack((input, batch_mask)))
+    return q_values, F.mse_loss(q_values, rewards)
+
+def state_value_advantage(curr_model, input, batch_mask, gamma, rewards, device):
     state_values = curr_model.critic(input)
     state_values_moved = torch.vstack((state_values[1:].detach(), torch.zeros((1, 1)).to(device)))
-    adv = adv + (gamma * state_values_moved) - state_values
+    target = rewards[..., None] + (gamma * state_values_moved)
+    adv = target - state_values
+    return adv, F.mse_loss(state_values, target)
 
-    surr1 = ratios * adv # Reward
-    surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * adv
+def q_value_advantage(curr_model, input, batch_mask, gamma, rewards, device):
+    q_values = curr_model.critic(torch.hstack((input, batch_mask)))
+    q_values_moved = torch.vstack((q_values[1:].detach(), torch.zeros((1, 1)).to(device)))
+    target = rewards + (gamma * q_values_moved)
+    adv = target - q_values
+    return adv, F.mse_loss(q_values, target)
 
-    return -torch.min(surr1, surr2) - 0.5 * curr_model.MSELoss(adv, state_values) - 0.01 * entropy(curr_log_probs, softmax_sizes)
-
-def batch_loss_with_q_value_critic(curr_model, prev_model, inputs, actions, adv, eps_clip=0.1, device='cuda'):
-    """
-    Returns negated loss (positive action should have negative loss) of a batch of inputs and actions.
-    Args:
-    - curr_model: Model -- the current model
-    - prev_model: Model -- the previous model
-    - inputs: list[torch.tensor] -- (batch_size, input_dim) the input to the model representing the game state
-    - actions: list[Action] -- (batch_size, action_dim) list of actions taken by the model using the output
-    - adv: int -- 1 if the model won the game, and -1/3 if the model lost
-    """
-    softmax_sizes = [52, 5, 5]
-    input = torch.stack(inputs)
-    output = curr_model(input)
-    prev_output = prev_model(input).detach()
-    curr_log_probs = logits_to_log_probs(output, softmax_sizes, device)
-    prev_log_probs = logits_to_log_probs(prev_output, softmax_sizes, device)
-    
-    ratios = torch.exp(curr_log_probs - prev_log_probs)
-
-    batch_mask = batch_generate_mask(actions).to(device)
-    ratios = ratios * batch_mask
-
-    q_vals = curr_model.critic(torch.hstack((input, batch_mask)))
-
-    surr1 = ratios * q_vals # Reward
-    surr2 = torch.clamp(ratios, 1-eps_clip, 1+eps_clip) * adv
-    adv = (torch.ones(q_vals.shape) * adv).to(device)
-
-    return -torch.min(surr1, surr2) - 1.5 * curr_model.MSELoss(adv, q_vals) - 0.01 * entropy(curr_log_probs, softmax_sizes)
+# actor_only: use identity loss
+# state_value_critic: use state_value
+# q_value_critic: use either q value function
 
 def batch_generate_mask(actions):
     """Creates a mask for the output tensors using a list of Action objects."""

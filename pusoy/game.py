@@ -1,7 +1,7 @@
 from pusoy.player import Player
 from pusoy.utils import RoundType, Hands, print_cards
 from pusoy.decision_function import Interactive, Neural, TrainingDecisionFunction
-from pusoy.models import DumbModel, D2RLModelWithCritic
+from pusoy.models import DumbModel, D2RLA2C
 
 from queue import Queue
 
@@ -121,7 +121,7 @@ class DummyInteractiveNeuralTrainingGame(Game):
         if path:
             adversaries = [Player(self, i, TrainingDecisionFunction(DumbModel())) for i in range(1, 4)]
         else:
-            model = D2RLModelWithCritic()
+            model = D2RLA2C()
             model.load_state_dict(torch.load(path))
             adversaries = [Player(self, i, Neural(model)) for i in range(1, 4)]
         players = [you] + adversaries
