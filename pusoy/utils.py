@@ -49,8 +49,8 @@ class Hands(Enum):
             return self.value < other.value
         return NotImplemented
     
-    def to_tensor(self):
-        tensor = torch.zeros(6, dtype=torch.bool)
+    def to_tensor(self, device):
+        tensor = torch.zeros(6, dtype=torch.bool, device=device)
         tensor[self.value] = True
         return tensor[1:]
 
@@ -95,8 +95,8 @@ class RoundType(Enum):
     def __str__(self):
         return self.name
     
-    def to_tensor(self):
-        tensor = torch.zeros(5, dtype=torch.bool)
+    def to_tensor(self, device):
+        tensor = torch.zeros(5, dtype=torch.bool, device=device)
         value = min(self.value, 4)
         tensor[value] = True
         return tensor

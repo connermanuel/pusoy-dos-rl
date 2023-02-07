@@ -48,13 +48,13 @@ class D2RLCritic(torch.nn.Module):
     """
     Model that takes input and returns output logits vector.
     """
-    def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
+    def __init__(self, hidden_dim=256, input_dim=330, output_dim=1):
         super().__init__()
-        self.layer_1 = nn.Linear(input_dim + output_dim, hidden_dim)
-        self.layer_2 = nn.Linear(input_dim + output_dim + hidden_dim, hidden_dim)
-        self.layer_3 = nn.Linear(input_dim + output_dim + hidden_dim, hidden_dim)
-        self.layer_4 = nn.Linear(input_dim + output_dim + hidden_dim, hidden_dim)
-        self.out_layer = nn.Linear(input_dim + output_dim + hidden_dim, 1)
+        self.layer_1 = nn.Linear(input_dim, hidden_dim)
+        self.layer_2 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.layer_3 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.layer_4 = nn.Linear(input_dim + hidden_dim, hidden_dim)
+        self.out_layer = nn.Linear(hidden_dim, output_dim)
         self.apply(weights_init_)
 
         with torch.no_grad():
@@ -91,7 +91,7 @@ class D2RLAC(Base):
     """
     def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
         super().__init__(hidden_dim, input_dim, output_dim)
-        self.critic = D2RLCritic(hidden_dim, input_dim, output_dim)
+        self.critic = D2RLCritic(hidden_dim, input_dim, 1)
         self.adv_func = state_value
 
 class D2RLA2C(D2RLAC):
@@ -110,7 +110,7 @@ class D2RLAQC(Base):
     """
     def __init__(self, hidden_dim=256, input_dim=330, output_dim=62):
         super().__init__(hidden_dim, input_dim, output_dim)
-        self.critic = D2RLCritic(hidden_dim, input_dim, output_dim)
+        self.critic = D2RLCritic(hidden_dim, input_dim + output_dim, 1)
         self.adv_func = q_value
 
 

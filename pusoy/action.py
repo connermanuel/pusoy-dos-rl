@@ -17,6 +17,14 @@ class Action(ABC):
     def play(self, player, debug, is_first_move):
         pass
 
+    def clone(self):
+        self.cards = self.cards.clone()
+        return self
+    
+    def to(self, device):
+        self.cards = self.cards.clone().to(device)
+        return self
+
 class Pass(Action):
     def play(self, player, debug, is_first_move):
         player.passed = True

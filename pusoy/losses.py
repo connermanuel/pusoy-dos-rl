@@ -28,8 +28,8 @@ def ppo_loss(curr_model: torch.nn.Module, prev_model: torch.nn.Module, inputs: L
     prev_log_probs = logits_to_log_probs(prev_output, SOFTMAX_SIZES, device)
 
     ratios = torch.exp(curr_log_probs - prev_log_probs)
-    batch_mask = batch_generate_mask(actions)
-    ratios = ratios * batch_mask.to(device)
+    batch_mask = batch_generate_mask(actions, device)
+    ratios = ratios * batch_mask
 
     adv, critic_loss = curr_model.adv_func(curr_model, input, batch_mask, gamma, rewards, device)
     surr1 = ratios * adv
@@ -67,9 +67,10 @@ def q_value_advantage(curr_model, input, batch_mask, gamma, rewards, device):
 # state_value_critic: use state_value
 # q_value_critic: use either q value function
 
-def batch_generate_mask(actions):
+def batch_generate_mask(actions, device):
     """Creates a mask for the output tensors using a list of Action objects."""
-    card_tensors, round_tensors, hand_tensors = tuple(zip(*[(action.cards, action.type.to_tensor(), action.hand.to_tensor()) for action in actions]))
+    card_tensors, round_tensors, hand_tensors = tuple(zip(*[(action.cards, action.type.to_tensor(device=device), action.hand.to_tensor(device=device)) 
+                                                            for action in actions]))
     card_tensors, round_tensors, hand_tensors = torch.stack(card_tensors), torch.stack(round_tensors), torch.stack(hand_tensors)
     mask = torch.cat([card_tensors, round_tensors, hand_tensors], dim=1)
     return mask

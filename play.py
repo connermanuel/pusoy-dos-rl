@@ -4,7 +4,7 @@ from pusoy.decision_function import Interactive
 
 class DecisionFunctionGame(Game):
     def __init__(self, decision_function, debug=False):
-        players = [Player(self, i, decision_function) for i in range(4)]
+        players = [Player(i, decision_function) for i in range(4)]
         super().__init__(players, debug=debug)
 
 class InteractiveGame(DecisionFunctionGame):

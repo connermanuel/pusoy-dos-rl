@@ -3,9 +3,8 @@ from pusoy.decision_function import Interactive
 import torch
 
 class Player():
-    def __init__(self, game, number, decision_function):
-        self.cards = torch.zeros(52)
-        self.game = game
+    def __init__(self, number, decision_function, device='cuda'):
+        self.cards = torch.zeros(52).to(device)
         self.number = number
         self.passed = False
         self.decision_function = decision_function
@@ -16,7 +15,7 @@ class Player():
         Takes in a list of CARD objects and adds them to the player's CARDS vector."""
         for card in cards:
             self.cards[card.__hash__()] = 1
-    
+
     def play_round(self, debug=False, is_first_move=False):
         while True:
             try:
