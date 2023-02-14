@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from typing import List
-from action import Action
+from pusoy.action import Action
 
 SOFTMAX_SIZES = [52, 5, 5]
 
