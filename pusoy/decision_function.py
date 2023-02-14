@@ -434,7 +434,7 @@ class Neural(DecisionFunction):
         return best_action
 
     def return_pass(self, output, card_list, prev_play, hand_type, is_pending, is_first_move):
-        return Pass()
+        return Pass(cards=torch.zeros(52, device=self.device))
         
     def clear_instances(self):
         self.instances = []

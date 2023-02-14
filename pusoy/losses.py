@@ -24,6 +24,7 @@ def ppo_loss(curr_model: torch.nn.Module, prev_model: torch.nn.Module, inputs: L
     input = torch.stack(inputs)
     output = curr_model.actor(input)
     prev_output = prev_model.actor(input).detach()
+    rewards = rewards[..., None]
     curr_log_probs = logits_to_log_probs(output, SOFTMAX_SIZES, device)
     prev_log_probs = logits_to_log_probs(prev_output, SOFTMAX_SIZES, device)
 
@@ -52,7 +53,7 @@ def q_value(curr_model, input, batch_mask, gamma, rewards, device):
 def state_value_advantage(curr_model, input, batch_mask, gamma, rewards, device):
     state_values = curr_model.critic(input)
     state_values_moved = torch.vstack((state_values[1:].detach(), torch.zeros((1, 1)).to(device)))
-    target = rewards[..., None] + (gamma * state_values_moved)
+    target = rewards + (gamma * state_values_moved)
     adv = target - state_values
     return adv, F.mse_loss(state_values, target)
 

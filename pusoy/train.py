@@ -5,7 +5,7 @@ from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.losses import ppo_loss
 
 import torch
-from torch.multiprocessing import Process, Event, Queue, Manager, Pool, cpu_count, set_start_method
+from torch.multiprocessing import Process, Event, Queue, Manager, Pool, cpu_count, set_start_method, set_sharing_strategy
 
 import os
 import argparse
@@ -62,9 +62,8 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
 
     total_winning_actions, total_losing_actions = [], []
 
-    # m = Manager()
+    m = Manager()
     winning_actions, losing_actions = Queue(), Queue()
-    # done_event = Event()
     done_queue = Queue()
 
     wins_list = []
@@ -88,7 +87,6 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
             
             while num_done < batch_size:
                 id, res = done_queue.get(timeout=20)
-                print('obtained')
 
                 # Process win and lose actions
                 win_actions_orig, lose_actions_orig = winning_actions.get(), losing_actions.get()
@@ -259,8 +257,11 @@ def main(
     return model
 
 if __name__ == "__main__":
-    set_start_method("forkserver")
-    torch.multiprocessing.set_sharing_strategy("file_system")
+    try:
+        set_start_method("forkserver")
+    except ValueError:
+        set_start_method("spawn")
+    set_sharing_strategy("file_system")
 
     try:
         import resource

@@ -14,7 +14,7 @@ from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.game import Game
 
 import torch
-from torch.multiprocessing import Pool, set_start_method
+from torch.multiprocessing import Pool, set_start_method, set_sharing_strategy
 
 import joblib
 import argparse
@@ -145,8 +145,11 @@ def main(args):
     joblib.dump(best_whales, f"{args.output_dir}/best_whales.pkl")
 
 if __name__ == "__main__":
-    set_start_method("spawn")
-    torch.multiprocessing.set_sharing_strategy("file_system")
+    try:
+        set_start_method("forkserver")
+    except ValueError:
+        set_start_method("spawn")
+    set_sharing_strategy("file_system")
 
     try:
         import resource
