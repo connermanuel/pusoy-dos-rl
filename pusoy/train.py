@@ -267,11 +267,10 @@ def main(
     return model
 
 if __name__ == "__main__":
-    try:
-        set_start_method("forkserver")
-    except ValueError:
-        set_start_method("spawn")
+    set_start_method("spawn")
     set_sharing_strategy("file_system")
+
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
     try:
         import resource
