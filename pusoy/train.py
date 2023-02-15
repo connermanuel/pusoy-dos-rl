@@ -6,6 +6,7 @@ from pusoy.losses import ppo_loss
 
 import torch
 from torch.multiprocessing import Process, Event, Queue, Manager, Pool, cpu_count, set_start_method, set_sharing_strategy
+from queue import Empty
 
 import os
 import argparse
@@ -63,9 +64,7 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     total_winning_actions, total_losing_actions = [], []
 
     m = Manager()
-    winning_actions, losing_actions = Queue(), Queue()
-    done_queue = Queue()
-
+    queue = Queue()
     wins_list = []
 
     print(f'Beginning training')
@@ -77,19 +76,22 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
         if method == "process":
             ### Process implementation
             num_done = 0
+
             events = [Event() for i in range(pool_size)]
-            init_args = [[curr_model, models, winning_actions, losing_actions, done_queue, events[id], id, device, eps] for id in range(pool_size)]
-            processes = []
-            for i in range(pool_size):
-                process = Process(target=play_round, args=init_args[i])
-                process.start()
-                processes.append(process)
+            init_args = [[curr_model, models, queue, events[id], id, device, eps] for id in range(pool_size)]
+            processes = [Process(target=play_round, args=init_args[i]) for i in range(pool_size)]
+            [process.start() for process in processes]
             
             while num_done < batch_size:
-                id, res = done_queue.get(timeout=20)
+                try:
+                    id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=20)
+                except Empty:
+                    events = [Event() for i in range(pool_size)]
+                    init_args = [[curr_model, models, queue, events[id], id, device, eps] for id in range(pool_size)]
+                    processes = [Process(target=play_round, args=init_args[i]) for i in range(pool_size)]
+                    [process.start() for process in processes]
+                    continue
 
-                # Process win and lose actions
-                win_actions_orig, lose_actions_orig = winning_actions.get(), losing_actions.get()
                 win_actions = [(t[0].clone(), t[1].clone()) for t in win_actions_orig]
                 lose_actions = [(t[0].clone(), t[1].clone()) for t in lose_actions_orig]
                 total_winning_actions.append(win_actions)
@@ -97,15 +99,18 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
                 del win_actions_orig, lose_actions_orig
 
                 events[id].set()
+                processes[id].join(5)
                 if num_done < batch_size - pool_size:
                     events[id] = Event()
-                    args = [curr_model, models, winning_actions, losing_actions, done_queue, events[id], id, device, eps]
+                    args = [curr_model, models, queue, events[id], id, device, eps]
                     process = Process(target=play_round, args=args)
                     process.start()
                     processes[id] = process
 
                 num_done += 1
                 wins += res
+            [event.set() for event in events]
+            [process.join() for process in processes]
 
         else:
             ### Pool implementation
@@ -174,8 +179,8 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     return wins_list
 
 def play_round(
-        curr_model: torch.nn.Module, list_of_models: List[torch.nn.Module], winning_actions: Queue, 
-        losing_actions: Queue, done_queue: Queue, done_event: Event, id: int, device: str='cuda', eps: float=0.1, ):
+        curr_model: torch.nn.Module, list_of_models: List[torch.nn.Module], queue: Queue, 
+        done_event: Event, id: int, device: str='cuda', eps: float=0.1,):
     """
     Plays a round, and appends the winning actions and losing actions to the existing lists of actions.
     - curr_model -- the model currently being trained and evaluated
@@ -200,12 +205,13 @@ def play_round(
     for player in players:
         instances = player.decision_function.instances
         if player.winner:
-            winning_actions.put(instances)
+            # winning_actions.put(instances)
+            winning_instances = instances
         else:
             losing_instances.extend(instances)
     
-    losing_actions.put(losing_instances)
-    done_queue.put((id, player.winner))
+    # losing_actions.put(losing_instances)
+    queue.put((id, player.winner, winning_instances, losing_instances))
     done_event.wait()
 
 def play_round_async(
@@ -224,7 +230,6 @@ def play_round_async(
 
     losing_instances = []
     for player in players:
-        # instances = player.decision_function.instances
         instances = [(t[0].to('cpu'), t[1].to('cpu')) for t in player.decision_function.instances]
         if player.winner:
             winning_actions.put(instances)
@@ -232,7 +237,6 @@ def play_round_async(
             losing_instances.extend(instances)
     losing_actions.put(losing_instances)
     return player.winner
-
 
 
 def main(
