@@ -7,7 +7,6 @@ Hyperparameters:
  -- Alpha (entropy): 10^n (default is -3, or 1e-3)
  -- Discount Factor: (1 - 10^n)) (default is -2, or .99) (note: bounded above by -0.5)
 """
-from pusoy.models import Base, D2RLAC, D2RLA2C, D2RLA2QC, D2RLA2QC
 from pusoy.train import main as tr_main
 from pusoy.player import Player
 from pusoy.decision_function import TrainingDecisionFunction
@@ -141,6 +140,8 @@ def whales(args: argparse.Namespace):
 
 
 def main(args):
+    if args.pool_size == 0:
+        args.pool_size = torch.multiprocessing.cpu_count()
     args.output_dir = args.output_dir + f"/{args.model}"
     best_whales = whales(args)
     joblib.dump(best_whales, f"{args.output_dir}/best_whales.pkl")
@@ -161,14 +162,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train PUSOY model.")
     
     parser.add_argument("-p", "--pool_size", 
-        help="Number of CPU processes to spawn. Defaults to 4.",
-        type=int, default=4)
+        help="Number of CPU processes to spawn. Defaults to number of cpu cores.",
+        type=int, default=0)
     parser.add_argument("-b", "--batch_size", 
         help="Batch size. Defaults to 20.",
         type=int, default=20)
     parser.add_argument("-e", "--epochs", 
-        help="Training epochs. Defaults to 500.",
-        type=int, default=500)
+        help="Training epochs. Defaults to 250.",
+        type=int, default=250)
     parser.add_argument("--er_mult",
         help="Experience replay mult. Defaults to 4.",
         type=int, default=4)
@@ -176,8 +177,8 @@ if __name__ == "__main__":
         help="Output directory. Defaults to ./models.",
         type=str, default="./models")
     parser.add_argument("--save_steps", 
-        help="Steps to take before saving checkpoint. Defaults to 500",
-        type=int, default=500)
+        help="Steps to take before saving checkpoint. Defaults to 250",
+        type=int, default=250)
     parser.add_argument("--method", 
         help="Whether to use process-based or pool-based implementation. Defaults to process.",
         choices=["process", "pool"],
@@ -188,11 +189,11 @@ if __name__ == "__main__":
         choices=["base", "ac", "a2c", "aqc", "a2qc"],
         type=str, default="a2c")
     parser.add_argument("--n_whales", 
-        help="Number of whales. Defaults to 8",
-        type=int, default=8)
+        help="Number of whales. Defaults to 4",
+        type=int, default=4)
     parser.add_argument("--n_iters", 
-        help="Number of iterations. Defaults to 10",
-        type=int, default=10)
+        help="Number of iterations. Defaults to 8",
+        type=int, default=8)
 
     args = parser.parse_args()
     main(args)
