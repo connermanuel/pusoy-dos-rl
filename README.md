@@ -9,4 +9,5 @@ To train the model, cd into `pusoy` and run `python train.py`. Use the `-h` flag
 To play an interactive game, run `python play.py`.
 To observe a model play against dummies, look into `modelvsdummies.py`
 
-I work on Windows, so if something is broken and you aren't on Windows, well, it's probably a Windows thing.
+I work on Windows, so if something is broken and you aren't on Windows, well, it's probably a Windows thing. 
+Though, I did train this on a VM, so this works on debian too, it seems.
