@@ -13,6 +13,8 @@ import argparse
 import random
 import joblib
 import copy
+import time
+import sys
 
 from typing import List
 
@@ -83,9 +85,13 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
             [process.start() for process in processes]
             
             while num_done < batch_size:
+                print(num_done)
                 try:
                     id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=20)
                 except Empty:
+                    [process.kill() for process in processes]
+                    [process.join() for process in processes]
+                    events.clear(), processes.clear()
                     events = [Event() for i in range(pool_size)]
                     init_args = [[curr_model, models, queue, events[id], id, device, eps] for id in range(pool_size)]
                     processes = [Process(target=play_round, args=init_args[i]) for i in range(pool_size)]
