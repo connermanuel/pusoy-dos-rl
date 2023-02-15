@@ -85,7 +85,6 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
             [process.start() for process in processes]
             
             while num_done < batch_size:
-                print(num_done)
                 try:
                     id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=20)
                 except Empty:
