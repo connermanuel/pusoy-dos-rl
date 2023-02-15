@@ -86,7 +86,7 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
             
             while num_done < batch_size:
                 try:
-                    id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=20)
+                    id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=30)
                 except Empty:
                     print("Timeout, resetting processes...")
                     [process.kill() for process in processes]
