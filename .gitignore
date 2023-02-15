@@ -4,6 +4,10 @@ pusoy/model*/
 # VSCode extras
 .vscode
 
+# Out files
+logs/*
+nohup.out
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
