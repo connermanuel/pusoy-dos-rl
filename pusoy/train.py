@@ -275,7 +275,7 @@ if __name__ == "__main__":
     try:
         import resource
         rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
-        resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(8192, rlimit[1]), rlimit[1]))
     except ImportError:
         pass
 
