@@ -20,6 +20,7 @@ import os
 import joblib
 import argparse
 import math
+import random
 
 NUM_PARAMS = 5
 
@@ -63,19 +64,21 @@ def faceoff_single(model_0, model_1, model_2, model_3):
 
 def faceoff_four(models: list, args=argparse.Namespace):
     """Takes four models and makes them play n_rounds against each other. Returns an array of win percentages."""
-    n_rounds= args.epochs
+    n_rounds = args.epochs
     with Pool(args.pool_size) as pool:
-        games = [pool.apply_async(faceoff_single, args=models) for i in range(n_rounds)]
-        results = [result.get(timeout=60) for result in games]
+        results = [pool.apply(faceoff_single, args=models) for i in range(n_rounds)]
         return torch.stack(results).sum(dim=0) / n_rounds
 
 def faceoff(models: list, args=argparse.Namespace):
     """Takes at least 4 models and makes them play n_rounds against each other. Returns win percentages from the final round"""
+    print("First faceoff")
     first_four_results = faceoff_four(models[:4], args)
+    print("Second faceoff")
     next_four_results = faceoff_four(models[-4:], args)
     top_idxs = torch.cat([
         torch.argsort(first_four_results, descending=True)[:2],
         torch.argsort(next_four_results, descending=True)[:2] + (len(models)-4)]).long()
+    print("Final faceoff")
     final_four_results = faceoff_four([models[i] for i in top_idxs], args)
     wins = torch.zeros(len(models))
     wins[top_idxs] = final_four_results
@@ -111,9 +114,12 @@ def whales(args: argparse.Namespace):
     """
     n_whales, n_iters, model_class = args.n_whales, args.n_iters, args.model
 
-    whales = [torch.tensor([8, -3.5, -3, -3, -2])]
-    if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)) <= args.n_whales:
-        whales = [torch.tensor(eval(whale_str)) for whale_str in os.listdir(args.output_dir)]
+    default = torch.tensor([8, -3.5, -3, -3, -2])
+    whales = [default]
+    if os.path.exists(args.output_dir):
+        other_whales = [torch.tensor(eval(whale_str)) for whale_str in os.listdir(args.output_dir) if whale_str != str(default)[7:-1]]
+        random.shuffle(other_whales)
+        whales = whales + other_whales[:3]
     
     for _ in range(n_whales - len(whales)):
         whales.append(torch.tensor([8, -3.5, -3, -3, -2]) + (torch.rand(NUM_PARAMS) - 0.5))
@@ -146,8 +152,9 @@ def whales(args: argparse.Namespace):
                 whale = spiral(whale, best_whale)
             whale = fix_whale(whale)
             whales[idx] = whale
-            del models[idx]
+            old_model = models[idx]
             models[idx] = build_model_from_args(model_class=model_class, whale_args=whale, args=args)
+            del old_model
         print("Commencing faceoff")
         results = faceoff(models, args)
         best_whale_idx = torch.argmax(results)

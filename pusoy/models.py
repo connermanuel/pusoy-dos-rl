@@ -114,7 +114,7 @@ class D2RLAQC(Base):
         self.adv_func = q_value
 
 
-class D2RLA2QC(D2RLAC):
+class D2RLA2QC(D2RLAQC):
     """
     Uses advantage in its reward function instead of state value.
     """
