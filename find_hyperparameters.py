@@ -56,10 +56,11 @@ def build_model_from_args(model_class: str, whale_args: torch.Tensor, args: argp
     
 def faceoff_single(model_0, model_1, model_2, model_3):
     """Takes four models and makes them play a round against each other. Returns a one-hot array of the winner."""
-    models = [model_0, model_1, model_2, model_3]
-    players = [Player(i, TrainingDecisionFunction(models[i]))  for i in range(4)]
-    game = Game(players)
-    game.play()
+    with torch.no_grad():
+        models = [model_0, model_1, model_2, model_3]
+        players = [Player(i, TrainingDecisionFunction(models[i]))  for i in range(4)]
+        game = Game(players)
+        game.play()
     return torch.tensor([player.winner for player in players], dtype=int)
 
 def faceoff_four(models: list, args=argparse.Namespace):
