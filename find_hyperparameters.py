@@ -11,6 +11,7 @@ from pusoy.train import main as tr_main
 from pusoy.player import Player
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.game import Game
+from pusoy.models import Base, D2RLAC, D2RLA2C, D2RLAQC, D2RLA2QC
 
 import torch
 from torch.multiprocessing import Pool, set_start_method, set_sharing_strategy
@@ -22,6 +23,14 @@ import math
 
 NUM_PARAMS = 5
 
+model_dispatch = {
+    "base": Base,
+    "ac": D2RLAC,
+    "a2c": D2RLA2C,
+    "aqc": D2RLAQC,
+    "a2qc": D2RLA2QC
+}
+
 def build_model_from_args(model_class: str, whale_args: torch.Tensor, args: argparse.Namespace):
     """Builds and trains a model of the specified type corresponding to the args, and saves to directory."""
 
@@ -32,10 +41,15 @@ def build_model_from_args(model_class: str, whale_args: torch.Tensor, args: argp
     gamma = 1 - 10**whale_args[4]
 
     output_dir = f"{args.output_dir}/{str(whale_args)[7:-1]}"
-    print(f"Training whale: {whale_args}")
 
-    model = tr_main(pool_size=args.pool_size, batch_size=args.batch_size, epochs=args.epochs, er_mult=args.er_mult, save_steps=args.save_steps,
-    method=args.method, output_dir=output_dir, model=model_class, hidden_dim=hidden_dim, lr_actor=lr_actor, lr_critic=lr_critic, alpha=alpha, gamma=gamma)
+    if os.path.exists(f"{output_dir}/{args.epochs}.pt"):
+        print(f"Loading whale from checkpoint: {whale_args}")
+        model = model_dispatch[model_class](hidden_dim = hidden_dim)
+        model.load_state_dict(torch.load(f"{output_dir}/{args.epochs}.pt"))
+    else:
+        print(f"Training whale: {whale_args}")
+        model = tr_main(pool_size=args.pool_size, batch_size=args.batch_size, epochs=args.epochs, er_mult=args.er_mult, save_steps=args.save_steps,
+        method=args.method, output_dir=output_dir, model=model_class, hidden_dim=hidden_dim, lr_actor=lr_actor, lr_critic=lr_critic, alpha=alpha, gamma=gamma)
 
     return model
     
@@ -56,13 +70,12 @@ def faceoff_four(models: list, args=argparse.Namespace):
         return torch.stack(results).sum(dim=0) / n_rounds
 
 def faceoff(models: list, args=argparse.Namespace):
-    """Takes 8 models and makes them play n_rounds against each other. Returns win percentages from the final round"""
+    """Takes at least 4 models and makes them play n_rounds against each other. Returns win percentages from the final round"""
     first_four_results = faceoff_four(models[:4], args)
-    next_four_results = faceoff_four(models[4:], args)
+    next_four_results = faceoff_four(models[-4:], args)
     top_idxs = torch.cat([
         torch.argsort(first_four_results, descending=True)[:2],
-        torch.argsort(next_four_results, descending=True)[:2] + 4]).long()
-    print(top_idxs)
+        torch.argsort(next_four_results, descending=True)[:2] + (len(models)-4)]).long()
     final_four_results = faceoff_four([models[i] for i in top_idxs], args)
     wins = torch.zeros(len(models))
     wins[top_idxs] = final_four_results
@@ -97,9 +110,14 @@ def whales(args: argparse.Namespace):
     Each whale is a tensor of hyperparameters with which a model can be built and instantiated.
     """
     n_whales, n_iters, model_class = args.n_whales, args.n_iters, args.model
+
     whales = [torch.tensor([8, -3.5, -3, -3, -2])]
-    for _ in range(n_whales - 1):
+    if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)) <= args.n_whales:
+        whales = [torch.tensor(eval(whale_str)) for whale_str in os.listdir(args.output_dir)]
+    
+    for _ in range(n_whales - len(whales)):
         whales.append(torch.tensor([8, -3.5, -3, -3, -2]) + (torch.rand(NUM_PARAMS) - 0.5))
+
     models = [build_model_from_args(model_class=model_class, whale_args=whale, args=args) for whale in whales]
     results = faceoff(models, args)
     best_whale_idx = torch.argmax(results)
@@ -128,6 +146,7 @@ def whales(args: argparse.Namespace):
                 whale = spiral(whale, best_whale)
             whale = fix_whale(whale)
             whales[idx] = whale
+            del models[idx]
             models[idx] = build_model_from_args(model_class=model_class, whale_args=whale, args=args)
         print("Commencing faceoff")
         results = faceoff(models, args)
@@ -137,7 +156,6 @@ def whales(args: argparse.Namespace):
         a -= step_size
     
     return best_whales
-
 
 def main(args):
     if args.pool_size == 0:
