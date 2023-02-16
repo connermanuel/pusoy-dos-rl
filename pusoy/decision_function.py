@@ -9,14 +9,9 @@ from abc import ABC, abstractmethod
 from typing import List
 
 class DecisionFunction(ABC):
-    # What information does the player have in a game of pusoy dos when making a decision?
-    # They have: 
-    #   which player they are
-    #   their list of cards, 
-    #   the round type, 
-    #   the previously played round,
-    #   the previous player,
-    #   and the list of cards all persons have played, from 1 to 4.
+    """
+    Defines the process for making a decision, given the input state.
+    """
 
     def __init__(self):
         pass
