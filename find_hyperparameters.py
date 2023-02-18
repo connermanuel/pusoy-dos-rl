@@ -122,7 +122,7 @@ def whales(args: argparse.Namespace):
         other_whales = []
         for whale_str in os.listdir(args.output_dir):
             whale_tensor = torch.tensor(eval(whale_str))
-            if torch.abs(whale_tensor - default).max() < 1 and not whale_tensor == default:
+            if torch.abs(whale_tensor - default).max() < 1 and not torch.equal(whale_tensor, default):
                 other_whales.append(whale_tensor)
         random.shuffle(other_whales)
         whales = whales + other_whales[:3]
