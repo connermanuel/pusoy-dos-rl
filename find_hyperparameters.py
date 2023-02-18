@@ -199,8 +199,8 @@ if __name__ == "__main__":
         help="Batch size. Defaults to 20.",
         type=int, default=20)
     parser.add_argument("-e", "--epochs", 
-        help="Training epochs. Defaults to 250.",
-        type=int, default=250)
+        help="Training epochs. Defaults to 500.",
+        type=int, default=500)
     parser.add_argument("--er_mult",
         help="Experience replay mult. Defaults to 4.",
         type=int, default=4)
@@ -223,8 +223,8 @@ if __name__ == "__main__":
         help="Number of whales. Defaults to 4",
         type=int, default=4)
     parser.add_argument("--n_iters", 
-        help="Number of iterations. Defaults to 8",
-        type=int, default=8)
+        help="Number of iterations. Defaults to 4",
+        type=int, default=4)
 
     args = parser.parse_args()
     main(args)
