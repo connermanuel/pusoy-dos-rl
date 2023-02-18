@@ -102,8 +102,9 @@ def spiral(whale, best_whale):
     return ((D * torch.exp(0.5*L)) * torch.cos(2.0*math.pi*L)) + best_whale
 
 def fix_whale(whale):
-    maxes = torch.tensor([10, -1, -1, -1, -0.5])
-    mins = torch.tensor([6, -10, -10, -10, -10])
+    default = torch.tensor([8, -3.5, -3, -3, -2])
+    maxes = torch.tensor([10, -1.5, -1, -1, -0.5])
+    mins = torch.tensor([6, -6, -6, -6, -4])
     whale = torch.where(whale < maxes, whale, maxes)
     whale = torch.where(whale > mins, whale, mins)
     return whale
@@ -121,7 +122,7 @@ def whales(args: argparse.Namespace):
         other_whales = []
         for whale_str in os.listdir(args.output_dir):
             whale_tensor = torch.tensor(eval(whale_str))
-            if torch.abs(whale_tensor - default).max() < 1:
+            if torch.abs(whale_tensor - default).max() < 1 and not whale_tensor == default:
                 other_whales.append(whale_tensor)
         random.shuffle(other_whales)
         whales = whales + other_whales[:3]
@@ -145,7 +146,7 @@ def whales(args: argparse.Namespace):
                 continue
             if torch.rand(1).item() < 0.5:
                 A, C = compute_A_and_C(a)
-                if torch.linalg.norm(A) < 0.4:
+                if torch.linalg.norm(A) < 0.6:
                     print("encircle")
                     target = best_whale
                 else:
