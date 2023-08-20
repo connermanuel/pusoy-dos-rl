@@ -42,6 +42,7 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     device -- device to perform operations on
     model_dir -- where to save the models
     """
+    start = 1
     torch.autograd.set_detect_anomaly(True)
     experience_replay_size = batch_size * experience_replay_mult
 
@@ -50,10 +51,23 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     curr_model.to(device)
     prev_model.to(device)
 
+    checkpoint = None
     if model_dir is None:
         model_dir = f"./models_a{lr_actor}_c{lr_critic}"
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
+    else:
+        print("Model directory already exists. Checking if there are any files to resume from.")
+        checkpoint_numbers = [int(fname[:-3]) for fname in os.listdir(model_dir)]
+        if checkpoint_numbers:
+            checkpoint = f"{max(checkpoint_numbers)}.pt"
+            start = max(checkpoint_numbers) + 1
+    
+    if checkpoint:
+        checkpoint = torch.load(f"{model_dir}/{checkpoint}")
+        curr_model.load_state_dict(checkpoint)
+        prev_model.load_state_dict(checkpoint)
+        print("Successfully loaded from checkpoint.")
     
     if curr_model.critic:
         opt = torch.optim.Adam([
@@ -72,7 +86,7 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     print(f'Beginning training')
     print(f"Cpu count: {cpu_count()}")
 
-    for epoch in range(1, epochs+1):
+    for epoch in range(start, epochs+1):
         wins = 0
 
         if method == "process":
@@ -132,14 +146,19 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
 #        
         # print('Selecting indices for training...')
         batch_number = -torch.log2(torch.rand(experience_replay_size))
-        batch_number = torch.trunc(torch.clamp(batch_number, max=min(epoch-1, num_models-1)))
+        batch_number = torch.trunc(torch.clamp(batch_number, max=min(epoch-start, num_models-1)))
         unit_number = torch.randint(low=0, high=batch_size, size=(experience_replay_size,))
         idxs = (batch_number * batch_size) + unit_number
         idxs = idxs.to(torch.int)
 
         # Nested list of winning and losing actions
-        batch_winning_actions = [total_winning_actions[-(idx+1)] for idx in idxs]
-        batch_losing_actions = [total_losing_actions[-(idx+1)] for idx in idxs]
+        try:
+            batch_winning_actions = [total_winning_actions[-(idx+1)] for idx in idxs]
+            batch_losing_actions = [total_losing_actions[-(idx+1)] for idx in idxs]
+        except IndexError as e:
+            print(len(total_winning_actions))
+            print(idxs)
+            raise e
 
         # Normalize rewards
         winning_actions_rewards = [gamma ** torch.arange(len(l), device=device) for l in batch_winning_actions]
@@ -271,6 +290,7 @@ if __name__ == "__main__":
     set_sharing_strategy("file_system")
 
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     try:
         import resource
@@ -280,7 +300,6 @@ if __name__ == "__main__":
         pass
 
     parser = argparse.ArgumentParser(description="Train PUSOY model.")
-
     
     parser.add_argument("-p", "--pool_size", 
         help="Number of CPU processes to spawn. Defaults to 2.",
@@ -289,8 +308,8 @@ if __name__ == "__main__":
         help="Batch size. Defaults to 20.",
         type=int, default=20)
     parser.add_argument("-e", "--epochs", 
-        help="Training epochs. Defaults to 1000.",
-        type=int, default=1000)
+        help="Training epochs. Defaults to 100000.",
+        type=int, default=100000)
     parser.add_argument("--er_mult",
         help="Experience replay mult. Defaults to 4.",
         type=int, default=4)
@@ -298,11 +317,11 @@ if __name__ == "__main__":
         help="Output directory. Defaults to ./models.",
         type=str, default="./models")
     parser.add_argument("--save_steps", 
-        help="Steps to take before saving checkpoint. Defaults to 500",
-        type=int, default=500)
+        help="Steps to take before saving checkpoint. Defaults to 300",
+        type=int, default=300)
     parser.add_argument("--method", 
-        help="Whether to use process-based or pool-based implementation. Defaults to process.",
-        type=str, default="process")
+        help="Whether to use process-based or pool-based implementation. Defaults to pool.",
+        type=str, default="pool")
     
     parser.add_argument("-m", "--model",
         help="Model architecture to train. Defaults to A2C.",
