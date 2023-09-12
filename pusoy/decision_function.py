@@ -21,6 +21,9 @@ class DecisionFunction(ABC):
         pass
 
 class Interactive(DecisionFunction):
+    def __init__(self, device="cuda"):
+        self.device=device
+        
     def play(self, player_no, card_list, round_type, hand_type, prev_play, prev_player, played_cards, is_first_move):
         """Returns a 52-len binary tensor of played cards or a pass action."""
         print(f'\nNow playing: Player {player_no}')
@@ -79,7 +82,10 @@ class Neural(DecisionFunction):
     """
     def __init__(self, model, device='cuda', eps=0, debug=False):
         self.model = model.to(device)
-        self.instances = []
+        self.instances = {
+            "inputs": [],
+            "actions": []
+        }
         self.funcs = [self.return_pass, self.find_best_single, self.find_best_pair, self.find_best_triple, self.find_best_hand]
         self.hand_funcs = [
             self.find_best_straight,
@@ -91,6 +97,7 @@ class Neural(DecisionFunction):
         self.device = device
         self.eps=eps
         self.debug=debug
+        self.states=None
     
     def selection_function(self, probs, num_samples):
         """
@@ -100,32 +107,29 @@ class Neural(DecisionFunction):
         return torch.topk(input=probs, k=num_samples)[1]
 
     def play(self: DecisionFunction, player_no: int, card_list: torch.Tensor, round_type: RoundType, 
-             hand_type: Hands, prev_play: torch.Tensor, prev_player: int, played_cards: List, is_first_move: bool):
+             hand_type: Hands, prev_play: torch.Tensor, prev_player: int, played_cards: List[torch.Tensor], is_first_move: bool):
         """
         Args:
         eps -- exploration parameter
         """
-        if torch.any(card_list < 0):
-            raise ValueError(f"Negative value in card list, {card_list}")
         # Process round type, current player, and previous player
-        round_type = round_type.to_tensor(device=self.device)
-        hand_type = hand_type.to_tensor(device=self.device)
+        round_type = round_type.to_tensor(dtype=torch.float)
+        hand_type = hand_type.to_tensor(dtype=torch.float)
         if prev_play is None:
-            prev_play = torch.zeros(52, device=self.device)
-        player_no_vec, prev_player_vec = torch.zeros(4, device=self.device), torch.zeros(4, device=self.device)
+            prev_play = torch.zeros(52)
+        player_no_vec, prev_player_vec = torch.zeros(4), torch.zeros(4)
         player_no_vec[player_no] = 1
         if prev_player is not None:
             prev_player_vec[prev_player] = 1
-        input = torch.cat([round_type.to(torch.float), hand_type.to(torch.float), player_no_vec, prev_player_vec])
 
         # Process player's cardlist, previously played round, and all previously played cards.
         card_lists = [card_list] + [prev_play] + played_cards
-        card_tensors = torch.cat(card_lists)
-        input = torch.cat([input, card_tensors])
-        self.input = input
+        input = torch.cat([round_type, hand_type, player_no_vec, prev_player_vec] + card_lists)
 
         # Feed input through NN, and filter output by available cards
-        output = self.model.actor(input)
+        output, _, self.states = self.model(input.to(self.device).reshape(1, -1), self.states, compute_critic=False)
+        output = output.to(torch.device("cpu"))[0]
+
         output[:52] = F.softmax(output[:52], dim=0)
         output[52:57] = F.softmax(output[52:57], dim=0)
         output[57:] = F.softmax(output[57:], dim=0)
@@ -135,6 +139,7 @@ class Neural(DecisionFunction):
 
         # Build a queue of potential actions, based on the return values.
         round_type_vals = output[52:57] # pass, single, double, triple, hand
+        round_type = round_type.type(torch.bool)
         round_type[1:] ^= round_type[0]
         round_type[0] ^= True
         round_type_vals = round_type_vals * round_type
@@ -144,7 +149,8 @@ class Neural(DecisionFunction):
             creation_func = self.funcs[idx]
             action = creation_func(output.clone(), card_list.clone(), prev_play, hand_type, ~round_type[0], is_first_move)
             if action:
-                self.instances.append((input, action))
+                self.instances["inputs"].append(input)
+                self.instances["actions"].append(action)
                 return action
         
         raise ValueError('No possible actions found!')
@@ -152,14 +158,14 @@ class Neural(DecisionFunction):
     def find_best_single(self, output, card_list, prev_play, hand_type, is_pending, is_first_move):
         if not torch.any(card_list):
             return None
-        cards = torch.zeros(52, device=self.device)
+        cards = torch.zeros(52)
         if is_first_move:
             if not card_list[0]:
                 return None
             best_idx = 0
         else:
             if not is_pending:
-                mask = torch.arange(52, device=self.device) > torch.nonzero(prev_play).flatten()[0].item()
+                mask = torch.arange(52) > torch.nonzero(prev_play).flatten()[0].item()
                 card_list = card_list * mask
                 if not torch.any(card_list):
                     return None
@@ -199,7 +205,7 @@ class Neural(DecisionFunction):
         valid = count_cards_per_value(card_list).to(torch.bool)
         if not is_pending:
             idx_highest = torch.div(torch.nonzero(prev_play).flatten()[-1].item(), 4, rounding_mode='trunc')
-            valid = valid * (torch.arange(13, device=self.device) > idx_highest)
+            valid = valid * (torch.arange(13) > idx_highest)
         
         valid = valid * has_a_pair_per_number
         idx_options = torch.nonzero(valid).flatten()
@@ -219,7 +225,7 @@ class Neural(DecisionFunction):
         best_move = moves[best_move_idx]
 
         if best_move is not None:
-            tensor = torch.zeros(52, device=self.device)
+            tensor = torch.zeros(52)
             tensor[best_move] = 1
             best_move = PlayCards(tensor, RoundType(k), Hands.NONE)
         
@@ -255,7 +261,7 @@ class Neural(DecisionFunction):
         valid_last_card_list = card_list
         if not is_pending:
             prev_highest = torch.nonzero(prev_play).flatten()[-1].item()
-            valid_last_card_list = valid_last_card_list * (torch.arange(52, device=self.device) > prev_highest)
+            valid_last_card_list = valid_last_card_list * (torch.arange(52) > prev_highest)
             valid = valid * card_exists_per_value(valid_last_card_list)[4:13]
 
         if not valid.any():
@@ -268,15 +274,15 @@ class Neural(DecisionFunction):
         if valid_idxs.nelement() == 0:
             return None
 
-        scores = torch.sum(max_values[valid_idxs.reshape(-1, 1) + torch.arange(4, device=self.device)], axis = 1) + last_max_values[valid_idxs]
+        scores = torch.sum(max_values[valid_idxs.reshape(-1, 1) + torch.arange(4)], axis = 1) + last_max_values[valid_idxs]
         best_option = self.selection_function(scores, 1)
         best_option = valid_idxs[best_option].item()
 
         best_idxs = torch.zeros(5).to(torch.long)
-        best_idxs[:4] = max_idxs[best_option:best_option+4] + (torch.arange(best_option, best_option+4, device=self.device) * 4)
+        best_idxs[:4] = max_idxs[best_option:best_option+4] + (torch.arange(best_option, best_option+4) * 4)
         best_idxs[4] = last_max_idxs[best_option+4] + ((best_option+4) * 4)
 
-        tensor = torch.zeros(52, device=self.device)
+        tensor = torch.zeros(52)
         tensor[best_idxs] = 1
         return PlayCards(tensor, RoundType.HANDS, Hands.STRAIGHT)
 
@@ -302,12 +308,12 @@ class Neural(DecisionFunction):
                 output_in_suit = output[suit:52:4].clone()
                 if is_first_move:
                     # If first move, you have to play 3C!
-                    first_val = torch.tensor([output_in_suit[0]], device=self.device)
+                    first_val = torch.tensor([output_in_suit[0]])
                     output_in_suit[0] = 0
                     top_idxs = self.selection_function(output_in_suit, 4)
                     top_vals = output_in_suit[top_idxs]
                     top_vals = torch.cat([top_vals, first_val])
-                    top_idxs = torch.cat([top_idxs, torch.tensor([0], device=self.device)])
+                    top_idxs = torch.cat([top_idxs, torch.tensor([0])])
                 elif not is_pending:
                     # If you have to beat another flush, your best card needs to trump theirs!
                     valid_last_cards_in_suit = output_in_suit * valid_last_cards[suit::4]
@@ -331,7 +337,7 @@ class Neural(DecisionFunction):
         best_option = options[self.selection_function(torch.Tensor(scores), 1)]
         
         if best_option is not None:
-            tensor = torch.zeros(52, device=self.device)
+            tensor = torch.zeros(52)
             tensor[best_option] = 1
             best_option = PlayCards(tensor, RoundType.HANDS, Hands.FLUSH)
         
@@ -343,7 +349,7 @@ class Neural(DecisionFunction):
         if not is_pending:
             cards_per_value = count_cards_per_value(prev_play)
             _, value_of_triple = torch.max(cards_per_value, dim=0)
-            mask = torch.zeros(52, device=self.device)
+            mask = torch.zeros(52)
             mask[value_of_triple*4: (value_of_triple + 1)*4] = 1
             prev_play = prev_play * mask
 
@@ -375,7 +381,7 @@ class Neural(DecisionFunction):
         if not is_pending:
             cards_per_value = count_cards_per_value(prev_play)
             _, value_of_triple = torch.max(cards_per_value, dim=0)
-            mask = torch.zeros(52, device=self.device)
+            mask = torch.zeros(52)
             mask[value_of_triple*4: (value_of_triple + 1)*4] = 1
             prev_play = prev_play * mask
 
@@ -399,7 +405,7 @@ class Neural(DecisionFunction):
         # If it is the first move, only possible straight flush is 3C 4C 5C 6C 7C
         if is_first_move:
             if torch.all(card_list[0:20:4]):
-                cards = torch.zeros(52, device=self.device)
+                cards = torch.zeros(52)
                 cards[0:20:4] = 1
                 return PlayCards(cards, RoundType.HANDS, Hands.STRAIGHT_FLUSH)
             return None
@@ -412,7 +418,7 @@ class Neural(DecisionFunction):
 
         for suit, suit_bool in enumerate(contains_flush):
             if suit_bool:
-                mask = torch.zeros(52, device=self.device)
+                mask = torch.zeros(52)
                 mask[suit::4] = 1
                 masked_card_list = card_list * mask
                 masked_output = output[:52] * masked_card_list
@@ -429,29 +435,16 @@ class Neural(DecisionFunction):
         return best_action
 
     def return_pass(self, output, card_list, prev_play, hand_type, is_pending, is_first_move):
-        return Pass(cards=torch.zeros(52, device=self.device))
+        return Pass(cards=torch.zeros(52))
         
     def clear_instances(self):
         self.instances = []
 
 class TrainingDecisionFunction(Neural):
     def selection_function(self: Neural, probs: torch.Tensor, num_samples: int):
-        try:
-            if self.debug:
-                print(probs)
-            return torch.multinomial(probs, num_samples)
-        except RuntimeError as e:
-            output = self.model.actor(self.input)
-            cloned = output.clone()
-            output[:52] = F.softmax(output[:52], dim=0)
-            output[52:57] = F.softmax(output[52:57], dim=0)
-            output[57:] = F.softmax(output[57:], dim=0)
-            raise RuntimeError(f"""
-            Error calling the selection function. Here are the probs: {probs}
-            Here is the card list: {output[18:70]}
-            Here are the unnormalized logits: {cloned}
-            Here are the normalized logits plus eps: {output}
-            Good luck!""")
+        if self.debug:
+            print(probs)
+        return torch.multinomial(probs, num_samples)
 
 
 

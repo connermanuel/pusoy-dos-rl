@@ -140,7 +140,7 @@ class PlayCards(Action):
 
 
 def DetermineIfStraight(cards):
-    values = torch.div(torch.nonzero(cards).flatten(), 4, rounding_mode='trunc')
+    values = torch.div(torch.nonzero(cards).flatten(), 4, rounding_mode='trunc').cpu()
     return torch.all(values == torch.arange(min(values), min(values) + 5))
 
 def DetermineIfFlush(cards):

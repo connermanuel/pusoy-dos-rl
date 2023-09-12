@@ -1,31 +1,53 @@
 from pusoy.game import Game
 from pusoy.player import Player
-from pusoy.models import Base, D2RLAC, D2RLA2C, D2RLAQC, D2RLA2QC
+from pusoy.models import A2CLSTM
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.losses import ppo_loss
 
 import torch
-from torch.multiprocessing import Process, Event, Queue, Manager, Pool, cpu_count, set_start_method, set_sharing_strategy
-from queue import Empty
+from torch.multiprocessing import (
+    Pool,
+    cpu_count,
+    set_start_method,
+    set_sharing_strategy,
+)
+from torch.distributions.binomial import Binomial
+import torch.nn.functional as F
 
 import os
 import argparse
-import random
-import joblib
-import copy
-import time
-import sys
+from collections import Counter
 
-from typing import List
+from typing import List, Type
 
-def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, batch_size: int=20, 
-          experience_replay_mult: int=4, method: str="process", lr_actor: float=0.001, lr_critic: float=0.001, eps: float=0.1, 
-          gamma: float=0.99, alpha: float=0.001, pool_size: int=4, save_steps: int=500, device: str='cuda', model_dir=None):
+DISTRIBUTION = Binomial(3, 0.2)
+ETA = 0.01
+
+def train(
+    ModelClass: Type[torch.nn.Module],
+    hidden_dim: int = 256,
+    num_models: int = 8,
+    epochs: int = 1500,
+    batch_size: int = 20,
+    lr_actor: float = 0.001,
+    lr_critic: float = 0.001,
+    eps: float = 0.1,
+    opponent_steps: int = 10,
+    gamma: float = 0.99,
+    lambd: float = 0.9,
+    c_entropy: float = 0.001,
+    beta: float = 0.1,
+    pool_size: int = 4,
+    save_steps: int = 500,
+    device: str = "cuda",
+    model_dir=None,
+):
     """
     Trains curr_model using self-play.
 
     Parameters:
-    curr_model -- the model to be trained.
+    ModelClass -- class constructor for models
+    hidden_dim -- hidden dimension of models used
     loss_func -- the function used to evaluate training loss.
     num_models -- number of models to store as adversaries
     epochs -- training epochs
@@ -34,9 +56,10 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     method -- whether to use process or pool
     lr_actor -- learning rate for actor
     lr_critic -- learning rate for critic
-    eps -- epsilon for loss function clipping    
+    eps -- epsilon for loss function clipping
     gamma -- discount factor for rewards
-    alpha -- entropy factor
+    c_entropy -- entropy factor
+    beta -- exploration parameter
     pool_size -- number of processes to spawn
     save_steps -- number of steps to take before saving
     device -- device to perform operations on
@@ -44,305 +67,379 @@ def train(curr_model: torch.nn.Module, num_models: int=15, epochs: int=1500, bat
     """
     start = 1
     torch.autograd.set_detect_anomaly(True)
-    experience_replay_size = batch_size * experience_replay_mult
 
-    prev_model = copy.deepcopy(curr_model)
-    models = [prev_model]
-    curr_model.to(device)
-    prev_model.to(device)
-
+    curr_model = ModelClass(hidden_dim=hidden_dim)
+    prev_model = create_copy(ModelClass, hidden_dim, curr_model)
     checkpoint = None
-    if model_dir is None:
-        model_dir = f"./models_a{lr_actor}_c{lr_critic}"
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-    else:
-        print("Model directory already exists. Checking if there are any files to resume from.")
-        checkpoint_numbers = [int(fname[:-3]) for fname in os.listdir(model_dir)]
-        if checkpoint_numbers:
-            checkpoint = f"{max(checkpoint_numbers)}.pt"
-            start = max(checkpoint_numbers) + 1
-    
     if checkpoint:
         checkpoint = torch.load(f"{model_dir}/{checkpoint}")
         curr_model.load_state_dict(checkpoint)
-        prev_model.load_state_dict(checkpoint)
         print("Successfully loaded from checkpoint.")
-    
-    if curr_model.critic:
-        opt = torch.optim.Adam([
-            {'params': curr_model.actor.parameters(), 'lr': lr_actor},
-            {'params': curr_model.critic.parameters(), 'lr': lr_critic}
-        ])
-    else:
-        opt = torch.optim.Adam(curr_model.parameters(), lr_actor)
 
-    total_winning_actions, total_losing_actions = [], []
+    opt = torch.optim.Adam(curr_model.parameters(), lr_actor)
 
-    m = Manager()
-    queue = Queue()
-    wins_list = []
+    past_models = {
+        "models": [create_copy(ModelClass, hidden_dim, curr_model)],
+        "qualities": torch.tensor([0.0]),
+    }
 
-    print(f'Beginning training')
+    buffer = ExperienceBuffer()
+
+    print(f"Beginning training")
     print(f"Cpu count: {cpu_count()}")
 
-    for epoch in range(start, epochs+1):
-        wins = 0
+    for epoch in range(start, epochs + 1):
+        epoch_buffer = ExperienceBuffer()
+        args_async = [curr_model.cpu(), past_models, device, eps]
+        pool = Pool(processes=pool_size)
+        for _ in range(batch_size):
+            pool.apply_async(
+                play_round_async,
+                args=args_async,
+                callback=(lambda result: pool_callback(result, epoch_buffer)),
+            )
 
-        if method == "process":
-            ### Process implementation
-            num_done = 0
+        if not buffer.is_empty():
+            train_step(
+                curr_model,
+                prev_model,
+                opt,
+                buffer,
+                device,
+                eps,
+                gamma,
+                lambd,
+                c_entropy,
+            )
 
-            events = [Event() for i in range(pool_size)]
-            init_args = [[curr_model, models, queue, events[id], id, device, eps] for id in range(pool_size)]
-            processes = [Process(target=play_round, args=init_args[i]) for i in range(pool_size)]
-            [process.start() for process in processes]
-            
-            while num_done < batch_size:
-                try:
-                    id, res, win_actions_orig, lose_actions_orig = queue.get(timeout=30)
-                except Empty:
-                    print("Timeout, resetting processes...")
-                    [process.kill() for process in processes]
-                    [process.join() for process in processes]
-                    events.clear(), processes.clear()
-                    events = [Event() for i in range(pool_size)]
-                    init_args = [[curr_model, models, queue, events[id], id, device, eps] for id in range(pool_size)]
-                    processes = [Process(target=play_round, args=init_args[i]) for i in range(pool_size)]
-                    [process.start() for process in processes]
-                    continue
+        curr_model.requires_grad_(False)
 
-                win_actions = [(t[0].clone(), t[1].clone()) for t in win_actions_orig]
-                lose_actions = [(t[0].clone(), t[1].clone()) for t in lose_actions_orig]
-                total_winning_actions.append(win_actions)
-                total_losing_actions.append(lose_actions)
-                del win_actions_orig, lose_actions_orig
+        pool.close()
+        pool.join()
+        buffer = epoch_buffer
 
-                events[id].set()
-                processes[id].join(5)
-                if num_done < batch_size - pool_size:
-                    events[id] = Event()
-                    args = [curr_model, models, queue, events[id], id, device, eps]
-                    process = Process(target=play_round, args=args)
-                    process.start()
-                    processes[id] = process
+        print(f"Epoch {epoch} winrate: {buffer.wins/batch_size}")
 
-                num_done += 1
-                wins += res
-            [event.set() for event in events]
-            [process.join() for process in processes]
-
-        else:
-            ### Pool implementation
-            winning_actions, losing_actions = m.Queue(), m.Queue()
-            args_async = [curr_model, models, winning_actions, losing_actions, device, eps]
-            with Pool(pool_size, maxtasksperchild=1) as pool:
-                wins = [pool.apply(play_round_async, args=args_async) for i in range(batch_size)]
-                wins = torch.sum(torch.tensor(wins)).item()
-
-            for i in range(batch_size):
-                total_winning_actions.append([(t[0].to(device), t[1].to(device)) for t in winning_actions.get()])
-                total_losing_actions.append([(t[0].to(device), t[1].to(device)) for t in losing_actions.get()])
-#        
-        # print('Selecting indices for training...')
-        batch_number = -torch.log2(torch.rand(experience_replay_size))
-        batch_number = torch.trunc(torch.clamp(batch_number, max=min(epoch-start, num_models-1)))
-        unit_number = torch.randint(low=0, high=batch_size, size=(experience_replay_size,))
-        idxs = (batch_number * batch_size) + unit_number
-        idxs = idxs.to(torch.int)
-
-        # Nested list of winning and losing actions
-        try:
-            batch_winning_actions = [total_winning_actions[-(idx+1)] for idx in idxs]
-            batch_losing_actions = [total_losing_actions[-(idx+1)] for idx in idxs]
-        except IndexError as e:
-            print(len(total_winning_actions))
-            print(idxs)
-            raise e
-
-        # Normalize rewards
-        winning_actions_rewards = [gamma ** torch.arange(len(l), device=device) for l in batch_winning_actions]
-        losing_actions_rewards = [gamma ** torch.arange(len(l), device=device) for l in batch_losing_actions]
-        winning_actions_rewards_sum = torch.sum(torch.concat(winning_actions_rewards))
-        losing_actions_rewards_sum = torch.sum(torch.concat(losing_actions_rewards))
-        win_ratio = winning_actions_rewards_sum / losing_actions_rewards_sum
-        losing_actions_rewards = [t * -win_ratio for t in losing_actions_rewards]
-        
-        win_inputs, win_actions = tuple(zip(*sum(batch_winning_actions, [])))
-        lose_inputs, lose_actions = tuple(zip(*sum(batch_losing_actions, [])))
-        win_rewards = torch.concat(winning_actions_rewards)
-        lose_rewards = torch.concat(losing_actions_rewards)
-
-        inputs = win_inputs + lose_inputs
-        actions = win_actions + lose_actions
-        rewards = torch.concat([win_rewards, lose_rewards])
-
-        # print(f'Training on winning actions...')
-        loss = ppo_loss(curr_model, prev_model, inputs, actions, rewards, eps_clip=eps, 
-                        gamma=gamma, alpha=alpha, device=device)
-        opt.zero_grad()
-        try:
-            loss.backward()
-            opt.step()
-        except RuntimeError as e:
-            print(f'Loss: {loss} caused runtime error, skipping for now')
-
-        print(f'Epoch {epoch} winrate: {wins/batch_size}')
+        past_models = update_qualities(epoch_buffer, past_models)
+        if not epoch % opponent_steps:
+            past_models = update_opponents(
+                past_models, ModelClass, curr_model, hidden_dim, num_models
+            )
 
         if not epoch % save_steps:
+            print("Saving...")
             torch.save(curr_model.state_dict(), f"{model_dir}/{epoch}.pt")
-        prev_model.load_state_dict(curr_model.state_dict())
-        models.append(prev_model)
-        if len(models) > num_models:
-            del models[0]
-        if len(total_winning_actions) > num_models * batch_size:
-            del total_winning_actions[:batch_size]
-            del total_losing_actions[:batch_size]
+            torch.save(opt.state_dict(), f"{model_dir}/optim_{epoch}.pt")
+            print("Save complete.")
 
-    joblib.dump(wins_list, 'wins_list.pkl')
 
-    return wins_list
+def train_step(
+    curr_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
+):
+    win_rewards = [torch.zeros(len(l), device=device) for l in buffer.win_inputs]
+    for t in win_rewards:
+        t[-1] = 1
+    lose_rewards = [torch.zeros(len(l), device=device) for l in buffer.lose_inputs]
+    for t in lose_rewards:
+        t[-1] = -1 / 3
 
-def play_round(
-        curr_model: torch.nn.Module, list_of_models: List[torch.nn.Module], queue: Queue, 
-        done_event: Event, id: int, device: str='cuda', eps: float=0.1,):
-    """
-    Plays a round, and appends the winning actions and losing actions to the existing lists of actions.
-    - curr_model -- the model currently being trained and evaluated
-    - list_of_models -- a list of previously trained models to be selected from as adversaries
-    - winning_actions -- a list of (input, action) pairs from winning players
-    - losing_actions -- a list of (input, action) pairs from losing players
-    - done_queue -- queue to put message on when finished running
-    - done_event -- event to wait for to end
-    - device -- device to run everything on
-    - eps -- epsilon for clipping gradients,
-    - id -- the process id
-    """
-    player = TrainingDecisionFunction(curr_model, device=device, eps=eps)
-    adversaries = [TrainingDecisionFunction(model, device=device, eps=eps) for model in random.choices(list_of_models, k=3)]
-    players = [player] + adversaries
-    players = [Player(i, p) for i, p in zip(range(4), players)]
+    inputs = buffer.win_inputs + buffer.lose_inputs
+    actions = buffer.win_actions + buffer.lose_actions
+    rewards = win_rewards + lose_rewards
 
-    game = Game(players)
-    game.play()
+    curr_model.requires_grad_(True)
+    loss = ppo_loss(
+        curr_model,
+        prev_model,
+        inputs,
+        actions,
+        rewards,
+        eps_clip=eps,
+        gamma=gamma,
+        lambd=lambd,
+        c_entropy=c_entropy,
+        device=device,
+    )
+    prev_model.load_state_dict(curr_model.state_dict())
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    curr_model.requires_grad_(False)
 
-    losing_instances = []
-    for player in players:
-        instances = player.decision_function.instances
-        if player.winner:
-            # winning_actions.put(instances)
-            winning_instances = instances
-        else:
-            losing_instances.extend(instances)
-    
-    # losing_actions.put(losing_instances)
-    queue.put((id, player.winner, winning_instances, losing_instances))
-    done_event.wait()
+
+class ExperienceBuffer:
+    def __init__(self):
+        self.wins = 0
+        self.win_inputs = []
+        self.win_actions = []
+        self.lose_inputs = []
+        self.lose_actions = []
+        self.loss_counter = Counter()
+
+    def is_empty(self):
+        return not bool(self.win_inputs)
+
 
 def play_round_async(
-        curr_model: torch.nn.Module, list_of_models: List[torch.nn.Module], winning_actions: Queue, 
-        losing_actions: Queue, device='cuda', eps=0.1):
-    """
-    Same as play_round, but puts everythigng onto the cpu and doesn't use events and done_queue
-    """
-    player = TrainingDecisionFunction(curr_model, device=device, eps=eps)
-    adversaries = [TrainingDecisionFunction(model, device=device, eps=eps) for model in random.choices(list_of_models, k=3)]
-    players = [player] + adversaries
-    players = [Player(i, p) for i, p in zip(range(4), players)]
+    curr_model: torch.nn.Module,
+    past_models: dict,
+    device="cuda",
+    beta=0.1,
+):
+    n_past_models = int(DISTRIBUTION.sample())
+    models = [curr_model for _ in range(4 - n_past_models)]
+    past_model_idxs = []
+    if n_past_models:
+        past_model_idxs = torch.multinomial(
+            torch.exp(past_models["qualities"]), n_past_models, replacement=True
+        ).tolist()
+        models.extend([past_models["models"][idx] for idx in past_model_idxs])
 
+    decision_functions = [
+        TrainingDecisionFunction(model, device, beta) for model in models
+    ]
+    players = [Player(i, func) for i, func in enumerate(decision_functions)]
     game = Game(players)
     game.play()
 
     losing_instances = []
-    for player in players:
-        instances = [(t[0].to('cpu'), t[1].to('cpu')) for t in player.decision_function.instances]
-        if player.winner:
-            winning_actions.put(instances)
+    for p in players:
+        if p.winner:
+            winning_instances = p.decision_function.instances
         else:
-            losing_instances.extend(instances)
-    losing_actions.put(losing_instances)
-    return player.winner
+            losing_instances.append(p.decision_function.instances)
+    return (players[0].winner, winning_instances, losing_instances, past_model_idxs)
+
+
+def update_qualities(buffer, past_models):
+    probabilities = F.softmax(past_models["qualities"], dim=0)
+    for idx in buffer.loss_counter.keys():
+        past_models["qualities"][idx] -= (
+            buffer.loss_counter[idx] * ETA / (probabilities[idx] * len(probabilities))
+        )
+    return past_models
+
+
+def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models):
+    past_models["models"].append(create_copy(ModelClass, hidden_dim, curr_model))
+    past_models["qualities"] = torch.cat(
+        (
+            past_models["qualities"],
+            torch.max(past_models["qualities"]).reshape(1),
+        )
+    )
+    if len(past_models) > num_models:
+        min_idx = torch.argmin(past_models["qualities"])
+        past_models["models"] = (
+            past_models["models"][:min_idx] + past_models["models"][min_idx + 1]
+        )
+        past_models["qualities"] = (
+            past_models["qualities"][:min_idx] + past_models["qualities"][min_idx + 1]
+        ) 
+    return past_models
+
+
+def pool_callback(
+    result: List,
+    buffer: ExperienceBuffer,
+):
+    buffer.wins += result[0]
+    buffer.win_inputs.append(result[1]["inputs"])
+    buffer.win_actions.append(result[1]["actions"])
+    buffer.lose_inputs.extend([instance["inputs"] for instance in result[2]])
+    buffer.lose_actions.extend([instance["actions"] for instance in result[2]])
+    if result[0]:
+        for idx in result[3]:
+            buffer.loss_counter[idx] += 1
+
+
+def create_copy(
+    ModelClass: [torch.nn.Module],
+    hidden_dim: int,
+    model: torch.nn.Module,
+    requires_grad: bool = False,
+):
+    model_copy = ModelClass(hidden_dim=hidden_dim)
+    model_copy.requires_grad_(requires_grad)
+    model_copy.load_state_dict(model.state_dict())
+    return model_copy
+
+
+def create_index(
+    experience_replay_size: int,
+    batch_size: int,
+    batches_available: int,
+    target_batches: int,
+):
+    batch_number = -torch.log2(torch.rand(experience_replay_size))
+    batch_number = torch.trunc(
+        torch.clamp(batch_number, max=min(batches_available, target_batches))
+    )
+    unit_number = torch.randint(low=0, high=batch_size, size=(experience_replay_size,))
+    idxs = (batch_number * batch_size) + unit_number
+    idxs = idxs.to(torch.int)
+    return -idxs + 1
 
 
 def main(
-    pool_size=2, batch_size=20, epochs=1000, er_mult=4, output_dir="./models", save_steps=500, method="process", model="a2c", 
-    hidden_dim=256, lr_actor=1e-3, lr_critic=1e-3, alpha=1e-3, gamma=0.99):
-    
+    pool_size,
+    batch_size,
+    epochs,
+    num_models,
+    output_dir,
+    save_steps,
+    opponent_steps,
+    model,
+    hidden_dim,
+    lr_actor,
+    lr_critic,
+    c_entropy,
+    beta,
+    eps,
+    gamma,
+    lambd,
+):
     model_dispatch = {
-        "base": Base,
-        "ac": D2RLAC,
-        "a2c": D2RLA2C,
-        "aqc": D2RLAQC,
-        "a2qc": D2RLA2QC
+        "lstm": A2CLSTM,
     }
-    
+
     ModelClass = model_dispatch[model]
-    model = ModelClass(hidden_dim=hidden_dim)
-    
-    train(model, epochs=epochs, batch_size=batch_size, 
-          experience_replay_mult=er_mult, method=method, lr_actor=lr_actor, lr_critic=lr_critic,
-          gamma=gamma, alpha=alpha, pool_size=pool_size, save_steps=save_steps, model_dir=output_dir)
-    
+
+    train(
+        ModelClass,
+        hidden_dim,
+        num_models=num_models,
+        epochs=epochs,
+        batch_size=batch_size,
+        lr_actor=lr_actor,
+        lr_critic=lr_critic,
+        gamma=gamma,
+        lambd=lambd,
+        c_entropy=c_entropy,
+        beta=beta,
+        eps=eps,
+        pool_size=pool_size,
+        save_steps=save_steps,
+        opponent_steps=opponent_steps,
+        model_dir=output_dir,
+    )
+
     return model
+
 
 if __name__ == "__main__":
     set_start_method("spawn")
     set_sharing_strategy("file_system")
 
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     try:
         import resource
+
         rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(resource.RLIMIT_NOFILE, (min(8192, rlimit[1]), rlimit[1]))
     except ImportError:
         pass
 
     parser = argparse.ArgumentParser(description="Train PUSOY model.")
-    
-    parser.add_argument("-p", "--pool_size", 
-        help="Number of CPU processes to spawn. Defaults to 2.",
-        type=int, default=2)
-    parser.add_argument("-b", "--batch_size", 
-        help="Batch size. Defaults to 20.",
-        type=int, default=20)
-    parser.add_argument("-e", "--epochs", 
+
+    parser.add_argument(
+        "-p",
+        "--pool_size",
+        help="Number of CPU processes to spawn. Defaults to 3.",
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
+        "-b", "--batch_size", help="Batch size. Defaults to 30.", type=int, default=30
+    )
+    parser.add_argument(
+        "-e",
+        "--epochs",
         help="Training epochs. Defaults to 100000.",
-        type=int, default=100000)
-    parser.add_argument("--er_mult",
-        help="Experience replay mult. Defaults to 4.",
-        type=int, default=4)
-    parser.add_argument("--output_dir", 
+        type=int,
+        default=100000,
+    )
+    parser.add_argument(
+        "--num_models",
+        help="Number of models to keep. Defaults to 8.",
+        type=int,
+        default=8,
+    )
+    parser.add_argument(
+        "--output_dir",
         help="Output directory. Defaults to ./models.",
-        type=str, default="./models")
-    parser.add_argument("--save_steps", 
-        help="Steps to take before saving checkpoint. Defaults to 300",
-        type=int, default=300)
-    parser.add_argument("--method", 
-        help="Whether to use process-based or pool-based implementation. Defaults to pool.",
-        type=str, default="pool")
-    
-    parser.add_argument("-m", "--model",
-        help="Model architecture to train. Defaults to A2C.",
-        choices=["base", "ac", "a2c", "aqc", "a2qc"],
-        type=str, default="a2c")
-    parser.add_argument("--hidden_dim", 
+        type=str,
+        default="./models",
+    )
+    parser.add_argument(
+        "--save_steps",
+        help="Steps to take before saving checkpoint. Defaults to 512",
+        type=int,
+        default=512,
+    )
+    parser.add_argument(
+        "--opponent_steps",
+        help="Steps to take before storing an opponent as an adversary. Defaults to 32",
+        type=int,
+        default=32,
+    )
+
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="Model architecture to train. Defaults to LSTM.",
+        choices=["lstm"],
+        type=str,
+        default="lstm",
+    )
+    parser.add_argument(
+        "--hidden_dim",
         help="Change the hidden dim of the models. Defaults to 256.",
-        type=int, default=256)
-    parser.add_argument("--lr_actor", 
-        help="Actor learning rate. Defaults to 1e-03 (0.001).",
-        type=float, default=1e-03)
-    parser.add_argument("--lr_critic", 
-        help="Critic learning rate. Defaults to 1e-03 (0.001).",
-        type=float, default=1e-03)
-    parser.add_argument("--alpha", 
-        help="Alpha, for entropy. Defaults to 1e-03 (0.001).",
-        type=float, default=1e-03)
-    parser.add_argument("--gamma", 
-        help="Discount rate. Defaults to 0.99.",
-        type=float, default=0.99)
+        type=int,
+        default=256,
+    )
+    parser.add_argument(
+        "--lr_actor",
+        help="Actor learning rate. Defaults to 1e-04 (0.0001).",
+        type=float,
+        default=1e-04,
+    )
+    parser.add_argument(
+        "--lr_critic",
+        help="Critic learning rate. Defaults to 1e-04 (0.0001).",
+        type=float,
+        default=1e-04,
+    )
+    parser.add_argument(
+        "--c_entropy",
+        help="Entropy coefficient. Defaults to 1e-02 (0.01).",
+        type=float,
+        default=1e-02,
+    )
+    parser.add_argument(
+        "--beta",
+        help="Beta, for exploration. Defaults to 0.01.",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "--eps", help="Epsilon, for clipping. Defaults to 0.1.", type=float, default=0.1
+    )
+    parser.add_argument(
+        "--gamma",
+        help="Discount rate for computing loss. Defaults to 0.99.",
+        type=float,
+        default=0.99,
+    )
+    parser.add_argument(
+        "--lambd",
+        help="Hyperparameter for computing GAE. Defaults to 0.92.",
+        type=float,
+        default=0.92,
+    )
 
     args = parser.parse_args()
     main(**vars(args))
-

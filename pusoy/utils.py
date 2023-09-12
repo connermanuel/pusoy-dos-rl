@@ -49,9 +49,9 @@ class Hands(Enum):
             return self.value < other.value
         return NotImplemented
     
-    def to_tensor(self, device):
-        tensor = torch.zeros(6, dtype=torch.bool, device=device)
-        tensor[self.value] = True
+    def to_tensor(self, dtype=torch.bool):
+        tensor = torch.zeros(6, dtype=dtype)
+        tensor[self.value] = 1
         return tensor[1:]
 
 class Card():
@@ -95,10 +95,10 @@ class RoundType(Enum):
     def __str__(self):
         return self.name
     
-    def to_tensor(self, device):
-        tensor = torch.zeros(5, dtype=torch.bool, device=device)
-        value = min(self.value, 4)
-        tensor[value] = True
+    def to_tensor(self, dtype=torch.bool):
+        tensor = torch.zeros(5, dtype=dtype)
+        value = min(self.value, 4) # Maps hands to the 5th index, where it should belong.
+        tensor[value] = 1
         return tensor
 
 
@@ -122,9 +122,10 @@ def card_to_string(card):
 
 def print_cards(card_list):
     print('')
-    idxs = torch.nonzero(card_list).flatten()
-    for idx in idxs:
-        print(idx_to_card(idx.item()))
+    if card_list is not None:
+        idxs = torch.nonzero(card_list).flatten()
+        for idx in idxs:
+            print(idx_to_card(idx.item()))
     print('')
 
 faces_to_nums = {'J': 11, 'Q': 12, 'K': 13, 'A': 14}

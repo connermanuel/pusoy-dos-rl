@@ -3,8 +3,8 @@ from pusoy.decision_function import Interactive
 import torch
 
 class Player():
-    def __init__(self, number, decision_function, device='cuda'):
-        self.cards = torch.zeros(52).to(device)
+    def __init__(self, number, decision_function):
+        self.cards = torch.zeros(52)
         self.number = number
         self.passed = False
         self.decision_function = decision_function

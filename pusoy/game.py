@@ -1,17 +1,15 @@
 from pusoy.player import Player
-from pusoy.utils import RoundType, Hands, print_cards
+from pusoy.utils import RoundType, Hands
 from pusoy.decision_function import Interactive, Neural, TrainingDecisionFunction
-from pusoy.models import DumbModel, D2RLA2C
 
 from queue import Queue
 
-import numpy as np
 import torch
 
 class Game():
     """Class that represents an entire game"""
 
-    def __init__(self, players, debug=False, device='cuda'):
+    def __init__(self, players, debug=False):
         """Initializes a game with four players."""
         #TODO: add options for player numbs
         self.players = players
@@ -20,7 +18,7 @@ class Game():
             self.player_queue.put(p)
             p.game = self
         
-        self.played_cards = [torch.zeros(52).to(device)] * 4
+        self.played_cards = [torch.zeros(52)] * 4
 
         cards = torch.randperm(52)
         for idx, p in enumerate(self.players):
@@ -82,6 +80,6 @@ class Game():
         self.finished = True
         player.winner = True
     
-    def init_from_decision_functions(decision_functions):
+    def init_from_decision_functions(decision_functions, debug=False):
         players = [Player(i, decision_function) for i, decision_function in zip(range(4), decision_functions)]
-        return Game(players)
+        return Game(players, debug=debug)
