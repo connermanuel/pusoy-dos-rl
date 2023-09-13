@@ -16,7 +16,9 @@ import torch.nn.functional as F
 
 import os
 import argparse
+import copy
 from collections import Counter
+import pickle as pkl
 
 from typing import List, Type
 
@@ -39,8 +41,9 @@ def train(
     beta: float = 0.1,
     pool_size: int = 4,
     save_steps: int = 500,
+    checkpoint: str = None,
     device: str = "cuda",
-    model_dir=None,
+    model_dir = None,
 ):
     """
     Trains curr_model using self-play.
@@ -68,42 +71,43 @@ def train(
     start = 1
     torch.autograd.set_detect_anomaly(True)
 
-    curr_model = ModelClass(hidden_dim=hidden_dim)
-    prev_model = create_copy(ModelClass, hidden_dim, curr_model)
-    checkpoint = None
+    train_model = ModelClass(hidden_dim=hidden_dim)
+    train_model.to(device)
+    opt = torch.optim.Adam(train_model.parameters(), lr_actor)
+    past_models = {
+        "models": [create_copy(ModelClass, hidden_dim, train_model)],
+        "qualities": torch.tensor([0.0]),
+    }
+
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
     if checkpoint:
-        checkpoint = torch.load(f"{model_dir}/{checkpoint}")
-        curr_model.load_state_dict(checkpoint)
-        print("Successfully loaded from checkpoint.")
-
-    opt = torch.optim.Adam(curr_model.parameters(), lr_actor)
-
-    past_models = {
-        "models": [create_copy(ModelClass, hidden_dim, curr_model)],
-        "qualities": torch.tensor([0.0]),
-    }
+        train_model, opt, past_models, start = load_from_checkpoint(train_model, opt, model_dir, checkpoint)
+    
+    prev_model = create_copy(ModelClass, hidden_dim, train_model)
+    rollout_model = create_copy(ModelClass, hidden_dim, train_model)
 
     buffer = ExperienceBuffer()
 
     print(f"Beginning training")
     print(f"Cpu count: {cpu_count()}")
+    res = [None] * batch_size
+    pool = Pool(processes=pool_size)
 
     for epoch in range(start, epochs + 1):
         epoch_buffer = ExperienceBuffer()
-        args_async = [curr_model.cpu(), past_models, device, eps]
-        pool = Pool(processes=pool_size)
-        for _ in range(batch_size):
-            pool.apply_async(
+        for i in range(batch_size):
+            models, past_model_idxs = select_models(rollout_model, past_models)
+            args = [models, past_model_idxs, device, eps]
+            res[i] = pool.apply_async(
                 play_round_async,
-                args=args_async,
+                args=args,
                 callback=(lambda result: pool_callback(result, epoch_buffer)),
             )
 
         if not buffer.is_empty():
             train_step(
-                curr_model,
+                train_model,
                 prev_model,
                 opt,
                 buffer,
@@ -113,30 +117,54 @@ def train(
                 lambd,
                 c_entropy,
             )
-
-        curr_model.requires_grad_(False)
-
-        pool.close()
-        pool.join()
-        buffer = epoch_buffer
-
-        print(f"Epoch {epoch} winrate: {buffer.wins/batch_size}")
-
+        
+        prev_model.load_state_dict(rollout_model.state_dict())
         past_models = update_qualities(epoch_buffer, past_models)
         if not epoch % opponent_steps:
             past_models = update_opponents(
-                past_models, ModelClass, curr_model, hidden_dim, num_models
+                past_models, ModelClass, train_model, hidden_dim, num_models
             )
+        
+        [r.wait() for r in res]
+        buffer = epoch_buffer
+        rollout_model.load_state_dict(train_model.state_dict())
 
+        print(f"Epoch {epoch} winrate: {buffer.wins/batch_size}")
         if not epoch % save_steps:
-            print("Saving...")
-            torch.save(curr_model.state_dict(), f"{model_dir}/{epoch}.pt")
-            torch.save(opt.state_dict(), f"{model_dir}/optim_{epoch}.pt")
-            print("Save complete.")
+            save_checkpoint(train_model, opt, model_dir, past_models, epoch)
 
+def load_from_checkpoint(train_model, opt, model_dir, checkpoint):
+    print("Loading from checkpoint.")
+    train_model.load_state_dict(torch.load(f"{model_dir}/{checkpoint}/model.pt"))
+    opt.load_state_dict(torch.load(f"{model_dir}/{checkpoint}/optim.pt"))
+    with open(f"{model_dir}/{checkpoint}/opponents.pkl", "rb") as f:
+        past_models = pkl.load(f)
+    start = int(checkpoint[:-3]) + 1
+    print("Successfully loaded from checkpoint.")
+    return train_model, opt, past_models, start
+
+def save_checkpoint(train_model, opt, model_dir, past_models, epoch):
+    print("Saving...")
+    os.mkdir(f"{model_dir}/{epoch}")
+    torch.save(train_model.state_dict(), f"{model_dir}/{epoch}/model.pt")
+    torch.save(opt.state_dict(), f"{model_dir}/{epoch}/optim.pt")
+    with open(f"{model_dir}/{epoch}/opponents.pkl", "wb") as f:
+        pkl.dump(past_models, f)
+    print("Save complete.")
+
+def select_models(curr_model, past_models):
+    n_past_models = int(DISTRIBUTION.sample())
+    models = [curr_model for _ in range(4 - n_past_models)]
+    past_model_idxs = []
+    if n_past_models:
+        past_model_idxs = torch.multinomial(
+            torch.exp(past_models["qualities"]), n_past_models, replacement=True
+        ).tolist()
+        models.extend([past_models["models"][idx] for idx in past_model_idxs])
+    return models, past_model_idxs
 
 def train_step(
-    curr_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
+    train_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
 ):
     win_rewards = [torch.zeros(len(l), device=device) for l in buffer.win_inputs]
     for t in win_rewards:
@@ -149,9 +177,8 @@ def train_step(
     actions = buffer.win_actions + buffer.lose_actions
     rewards = win_rewards + lose_rewards
 
-    curr_model.requires_grad_(True)
     loss = ppo_loss(
-        curr_model,
+        train_model,
         prev_model,
         inputs,
         actions,
@@ -162,11 +189,9 @@ def train_step(
         c_entropy=c_entropy,
         device=device,
     )
-    prev_model.load_state_dict(curr_model.state_dict())
     opt.zero_grad()
     loss.backward()
     opt.step()
-    curr_model.requires_grad_(False)
 
 
 class ExperienceBuffer:
@@ -181,22 +206,12 @@ class ExperienceBuffer:
     def is_empty(self):
         return not bool(self.win_inputs)
 
-
 def play_round_async(
-    curr_model: torch.nn.Module,
-    past_models: dict,
+    models: list[torch.nn.Module],
+    past_model_idxs: list[int],
     device="cuda",
     beta=0.1,
 ):
-    n_past_models = int(DISTRIBUTION.sample())
-    models = [curr_model for _ in range(4 - n_past_models)]
-    past_model_idxs = []
-    if n_past_models:
-        past_model_idxs = torch.multinomial(
-            torch.exp(past_models["qualities"]), n_past_models, replacement=True
-        ).tolist()
-        models.extend([past_models["models"][idx] for idx in past_model_idxs])
-
     decision_functions = [
         TrainingDecisionFunction(model, device, beta) for model in models
     ]
@@ -230,7 +245,7 @@ def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models
             torch.max(past_models["qualities"]).reshape(1),
         )
     )
-    if len(past_models) > num_models:
+    while len(past_models["models"]) > num_models:
         min_idx = torch.argmin(past_models["qualities"])
         past_models["models"] = (
             past_models["models"][:min_idx] + past_models["models"][min_idx + 1]
@@ -290,6 +305,7 @@ def main(
     num_models,
     output_dir,
     save_steps,
+    checkpoint,
     opponent_steps,
     model,
     hidden_dim,
@@ -322,6 +338,7 @@ def main(
         eps=eps,
         pool_size=pool_size,
         save_steps=save_steps,
+        checkpoint=checkpoint,
         opponent_steps=opponent_steps,
         model_dir=output_dir,
     )
@@ -385,6 +402,12 @@ if __name__ == "__main__":
         help="Steps to take before storing an opponent as an adversary. Defaults to 32",
         type=int,
         default=32,
+    )
+    parser.add_argument(
+        "--checkpoint",
+        help="Checkpoint to load from.",
+        type=str,
+        default=None
     )
 
     parser.add_argument(
