@@ -7,6 +7,7 @@ pusoy/model*/
 # Out files
 logs/*
 nohup.out
+*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

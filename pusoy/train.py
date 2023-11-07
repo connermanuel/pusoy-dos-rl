@@ -3,6 +3,7 @@ from pusoy.player import Player
 from pusoy.models import A2CLSTM
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.losses import ppo_loss
+from pusoy.utils import ExperienceBuffer
 
 import torch
 from torch.multiprocessing import (
@@ -125,7 +126,7 @@ def train(
                 past_models, ModelClass, train_model, hidden_dim, num_models
             )
         
-        [r.wait() for r in res]
+        [r.wait(timeout=10) for r in res]
         buffer = epoch_buffer
         rollout_model.load_state_dict(train_model.state_dict())
 
@@ -139,7 +140,7 @@ def load_from_checkpoint(train_model, opt, model_dir, checkpoint):
     opt.load_state_dict(torch.load(f"{model_dir}/{checkpoint}/optim.pt"))
     with open(f"{model_dir}/{checkpoint}/opponents.pkl", "rb") as f:
         past_models = pkl.load(f)
-    start = int(checkpoint[:-3]) + 1
+    start = int(checkpoint) + 1
     print("Successfully loaded from checkpoint.")
     return train_model, opt, past_models, start
 
@@ -164,14 +165,23 @@ def select_models(curr_model, past_models):
     return models, past_model_idxs
 
 def train_step(
-    train_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
+    train_model: torch.nn.Module, 
+    prev_model: torch.nn.Module, 
+    opt: torch.optim.Optimizer,
+    buffer: ExperienceBuffer, 
+    device: str, 
+    eps: float=0.1, 
+    gamma: float=0.99,
+    lambd: float=0.9, 
+    c_critic: float=1,
+    c_entropy: float=0.001
 ):
     win_rewards = [torch.zeros(len(l), device=device) for l in buffer.win_inputs]
     for t in win_rewards:
         t[-1] = 1
     lose_rewards = [torch.zeros(len(l), device=device) for l in buffer.lose_inputs]
     for t in lose_rewards:
-        t[-1] = -1 / 3
+        t[-1] = -(len(win_rewards) / len(lose_rewards))
 
     inputs = buffer.win_inputs + buffer.lose_inputs
     actions = buffer.win_actions + buffer.lose_actions
@@ -186,25 +196,13 @@ def train_step(
         eps_clip=eps,
         gamma=gamma,
         lambd=lambd,
+        c_critic=c_critic,
         c_entropy=c_entropy,
         device=device,
     )
     opt.zero_grad()
     loss.backward()
     opt.step()
-
-
-class ExperienceBuffer:
-    def __init__(self):
-        self.wins = 0
-        self.win_inputs = []
-        self.win_actions = []
-        self.lose_inputs = []
-        self.lose_actions = []
-        self.loss_counter = Counter()
-
-    def is_empty(self):
-        return not bool(self.win_inputs)
 
 def play_round_async(
     models: list[torch.nn.Module],
@@ -215,7 +213,7 @@ def play_round_async(
     decision_functions = [
         TrainingDecisionFunction(model, device, beta) for model in models
     ]
-    players = [Player(i, func) for i, func in enumerate(decision_functions)]
+    players = [Player(i, func) for i, func in zip(torch.randperm(4), decision_functions)]
     game = Game(players)
     game.play()
 
@@ -248,11 +246,11 @@ def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models
     while len(past_models["models"]) > num_models:
         min_idx = torch.argmin(past_models["qualities"])
         past_models["models"] = (
-            past_models["models"][:min_idx] + past_models["models"][min_idx + 1]
+            past_models["models"][:min_idx] + past_models["models"][min_idx + 1:]
         )
-        past_models["qualities"] = (
-            past_models["qualities"][:min_idx] + past_models["qualities"][min_idx + 1]
-        ) 
+        past_models["qualities"] = torch.cat((
+            past_models["qualities"][:min_idx], past_models["qualities"][min_idx + 1:]
+        ))
     return past_models
 
 
@@ -261,9 +259,9 @@ def pool_callback(
     buffer: ExperienceBuffer,
 ):
     buffer.wins += result[0]
-    buffer.win_inputs.append(result[1]["inputs"])
+    buffer.win_inputs.append(torch.stack(result[1]["inputs"]))
     buffer.win_actions.append(result[1]["actions"])
-    buffer.lose_inputs.extend([instance["inputs"] for instance in result[2]])
+    buffer.lose_inputs.extend([torch.stack(instance["inputs"]) for instance in result[2]])
     buffer.lose_actions.extend([instance["actions"] for instance in result[2]])
     if result[0]:
         for idx in result[3]:
@@ -365,12 +363,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "-p",
         "--pool_size",
-        help="Number of CPU processes to spawn. Defaults to 3.",
+        help="Number of CPU processes to spawn. Defaults to 4.",
         type=int,
-        default=3,
+        default=4,
     )
     parser.add_argument(
-        "-b", "--batch_size", help="Batch size. Defaults to 30.", type=int, default=30
+        "-b", "--batch_size", help="Batch size. Defaults to 64.", type=int, default=64
     )
     parser.add_argument(
         "-e",
@@ -393,9 +391,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--save_steps",
-        help="Steps to take before saving checkpoint. Defaults to 512",
+        help="Steps to take before saving checkpoint. Defaults to 256",
         type=int,
-        default=512,
+        default=256,
     )
     parser.add_argument(
         "--opponent_steps",

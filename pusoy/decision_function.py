@@ -115,17 +115,7 @@ class Neural(DecisionFunction):
         # Process round type, current player, and previous player
         round_type = round_type.to_tensor(dtype=torch.float)
         hand_type = hand_type.to_tensor(dtype=torch.float)
-        if prev_play is None:
-            prev_play = torch.zeros(52)
-        player_no_vec, prev_player_vec = torch.zeros(4), torch.zeros(4)
-        player_no_vec[player_no] = 1
-        if prev_player is not None:
-            prev_player_vec[prev_player] = 1
-
-        # Process player's cardlist, previously played round, and all previously played cards.
-        card_lists = [card_list] + [prev_play] + played_cards
-        input = torch.cat([round_type, hand_type, player_no_vec, prev_player_vec] + card_lists)
-
+        input = generate_input_from_state(player_no, card_list, round_type, hand_type, prev_play, prev_player, played_cards)
         # Feed input through NN, and filter output by available cards
         output, _, self.states = self.model(input.to(self.device).reshape(1, -1), self.states, compute_critic=False)
         output = output.to(torch.device("cpu"))[0]
@@ -154,7 +144,7 @@ class Neural(DecisionFunction):
                 return action
         
         raise ValueError('No possible actions found!')
-    
+
     def find_best_single(self, output, card_list, prev_play, hand_type, is_pending, is_first_move):
         if not torch.any(card_list):
             return None
@@ -440,6 +430,18 @@ class Neural(DecisionFunction):
     def clear_instances(self):
         self.instances = []
 
+def generate_input_from_state(player_no: int, card_list: torch.Tensor, round_type: RoundType, 
+             hand_type: Hands, prev_play: torch.Tensor, prev_player: int, played_cards: List[torch.Tensor]):
+    if prev_play is None:
+        prev_play = torch.zeros(52)
+    player_no_vec, prev_player_vec = torch.zeros(4), torch.zeros(4)
+    player_no_vec[player_no] = 1
+    if prev_player is not None:
+        prev_player_vec[prev_player] = 1
+    card_lists = [card_list] + [prev_play] + played_cards
+    input = torch.cat([round_type, hand_type, player_no_vec, prev_player_vec] + card_lists)
+    return input
+
 class TrainingDecisionFunction(Neural):
     def selection_function(self: Neural, probs: torch.Tensor, num_samples: int):
         if self.debug:
@@ -451,7 +453,7 @@ class TrainingDecisionFunction(Neural):
 
             
     
-            
+      
             
         
 

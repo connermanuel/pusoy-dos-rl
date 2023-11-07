@@ -16,21 +16,20 @@ class Player():
         for card in cards:
             self.cards[card.__hash__()] = 1
 
-    def play_round(self, debug=False, is_first_move=False):
+    def play_round(self, game, debug=False, is_first_move=False):
         while True:
             try:
                 action = self.decision_function.play(
                     self.number,
                     self.cards,
-                    self.game.round_type,
-                    self.game.hand_type,
-                    self.game.prev_play,
-                    self.game.prev_player.number,
-                    self.game.played_cards,
+                    game.round_type,
+                    game.hand_type,
+                    game.prev_play,
+                    game.prev_player.number,
+                    game.played_cards,
                     is_first_move
                 )
-                action.play(self, debug, is_first_move)
-                return
+                return action
             except ValueError as ve:
                 print(ve)
     
@@ -38,6 +37,6 @@ class Player():
         return f"player {self.number}"
 
 class InteractivePlayer(Player):
-    def __init__(self, game, number, decision_function):
-        super().__init__(game, number, Interactive())
+    def __init__(self, number, decision_function):
+        super().__init__(number, Interactive())
 

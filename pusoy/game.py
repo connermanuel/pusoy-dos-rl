@@ -16,7 +16,6 @@ class Game():
         self.player_queue = Queue(maxsize=4)
         for p in self.players:
             self.player_queue.put(p)
-            p.game = self
         
         self.played_cards = [torch.zeros(52)] * 4
 
@@ -42,7 +41,8 @@ class Game():
     
     def play(self):
         while not self.finished:
-            self.curr_player.play_round(self.debug, self.is_first_move)
+            action = self.curr_player.play_round(self, self.debug, self.is_first_move)
+            action.play(self, self.curr_player, self.debug, self.is_first_move)
             if self.is_first_move:
                 self.is_first_move = False
             self.rotate_player()

@@ -1,6 +1,6 @@
 import torch
 from torch.multiprocessing import Pool, set_start_method
-from models import D2RLA2C
+from models import A2CLSTM
 from decision_function import TrainingDecisionFunction
 from game import Game
 from player import Player
@@ -19,18 +19,21 @@ def play_round_async(
 
 
 def faceoff_checkpoints(checkpoint_paths):
-    models = [D2RLA2C(), D2RLA2C(), D2RLA2C(), D2RLA2C()]
+    models = [A2CLSTM(), A2CLSTM(), A2CLSTM(), A2CLSTM()]
     for i in range(4):
-        models[i].load_state_dict(torch.load(checkpoint_paths[i]))
+        if checkpoint_paths[i]:
+            models[i].load_state_dict(torch.load(checkpoint_paths[i]))
     
     results = []
-    pool = Pool(processes=3)
-    for i in range(1000):
+    pool = Pool(processes=4)
+    play_round_async(models)
+    for i in range(2000):
         pool.apply_async(play_round_async, args=[models], callback=(
             lambda result: results.append(result)
         ))
     pool.close()
     pool.join()
+    print(len(results))
     results = torch.sum(torch.stack(results), dim=0) / len(results)
     print(checkpoint_paths)
     print(results)
@@ -39,11 +42,8 @@ def faceoff_checkpoints(checkpoint_paths):
 
 if __name__ == "__main__":
     set_start_method("spawn")
-    models = [6300, 8700, 15600, 19200, 20400]
-    for i in range(0, len(models)-3, 4):
-        checkpoints = [f"models/{models[i+u]}.pt" for u in range(4)]
-        faceoff_checkpoints(checkpoints)
-    checkpoints = [f"models/{models[-i]}.pt" for i in range(1, 5)]
+    models = ["2560", "", "", ""]
+    checkpoints = [f"models/{model}/model.pt" if model else None for model in models ]
     faceoff_checkpoints(checkpoints)
     
     

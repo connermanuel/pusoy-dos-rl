@@ -1,9 +1,22 @@
+from collections import Counter
 from enum import Enum
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any
 import torch
 
+class ExperienceBuffer:
+    def __init__(self):
+        self.wins = 0
+        self.win_inputs = []
+        self.win_actions = []
+        self.lose_inputs = []
+        self.lose_actions = []
+        self.loss_counter = Counter()
+
+    def is_empty(self):
+        return not bool(self.win_inputs)
+    
 class Suit(Enum):
     clubs = 0
     spades = 1

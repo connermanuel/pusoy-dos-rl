@@ -14,7 +14,7 @@ class Action(ABC):
         self.hand = hand
     
     @abstractmethod
-    def play(self, player, debug, is_first_move):
+    def play(self, game, player, debug, is_first_move):
         pass
 
     def clone(self):
@@ -26,14 +26,13 @@ class Action(ABC):
         return self
 
 class Pass(Action):
-    def play(self, player, debug, is_first_move):
+    def play(self, game, player, debug, is_first_move):
         player.passed = True
         if debug:
             print(f'Player {player.number} has passed')       
 
 class PlayCards(Action):
-    def play(self, player, debug, is_first_move):
-        game = player.game
+    def play(self, game, player, debug, is_first_move):
         if debug:
             print(f'Played the following cards:')
             print_cards(self.cards)
