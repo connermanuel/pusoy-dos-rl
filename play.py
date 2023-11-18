@@ -3,7 +3,7 @@ from pusoy.player import Player
 from pusoy.decision_function import Interactive
 
 class DecisionFunctionGame(Game):
-    def __init__(self, decision_function, debug=False):
+    def __init__(self, decision_function, debug=True):
         players = [Player(i, decision_function) for i in range(4)]
         super().__init__(players, debug=debug)
 
