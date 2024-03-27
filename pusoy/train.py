@@ -22,8 +22,9 @@ import pickle as pkl
 
 from typing import List, Type
 
-DISTRIBUTION = Binomial(3, 0.2)
+ADVERSARY_DISTRIBUTION = Binomial(3, 0.2)
 ETA = 0.01
+
 
 def train(
     ModelClass: Type[torch.nn.Module],
@@ -43,7 +44,7 @@ def train(
     save_steps: int = 500,
     checkpoint: str = None,
     device: str = "cuda",
-    model_dir = None,
+    model_dir=None,
 ):
     """
     Trains curr_model using self-play.
@@ -82,8 +83,10 @@ def train(
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
     if checkpoint:
-        train_model, opt, past_models, start = load_from_checkpoint(train_model, opt, model_dir, checkpoint)
-    
+        train_model, opt, past_models, start = load_from_checkpoint(
+            train_model, opt, model_dir, checkpoint
+        )
+
     prev_model = create_copy(ModelClass, hidden_dim, train_model)
     rollout_model = create_copy(ModelClass, hidden_dim, train_model)
 
@@ -117,14 +120,14 @@ def train(
                 lambd,
                 c_entropy,
             )
-        
+
         prev_model.load_state_dict(rollout_model.state_dict())
         past_models = update_qualities(epoch_buffer, past_models)
         if not epoch % opponent_steps:
             past_models = update_opponents(
                 past_models, ModelClass, train_model, hidden_dim, num_models
             )
-        
+
         [r.wait() for r in res]
         buffer = epoch_buffer
         rollout_model.load_state_dict(train_model.state_dict())
@@ -132,6 +135,7 @@ def train(
         print(f"Epoch {epoch} winrate: {buffer.wins/batch_size}")
         if not epoch % save_steps:
             save_checkpoint(train_model, opt, model_dir, past_models, epoch)
+
 
 def load_from_checkpoint(train_model, opt, model_dir, checkpoint):
     print("Loading from checkpoint.")
@@ -143,7 +147,9 @@ def load_from_checkpoint(train_model, opt, model_dir, checkpoint):
     print("Successfully loaded from checkpoint.")
     return train_model, opt, past_models, start
 
+
 def save_checkpoint(train_model, opt, model_dir, past_models, epoch):
+    """Save the weights of train_model as a cehckpoint to the model directory."""
     print("Saving...")
     os.mkdir(f"{model_dir}/{epoch}")
     torch.save(train_model.state_dict(), f"{model_dir}/{epoch}/model.pt")
@@ -152,8 +158,13 @@ def save_checkpoint(train_model, opt, model_dir, past_models, epoch):
         pkl.dump(past_models, f)
     print("Save complete.")
 
+
 def select_models(curr_model, past_models):
-    n_past_models = int(DISTRIBUTION.sample())
+    """Selects models to participate in the following round of self play.
+
+    This function dynamically selects the number of models
+    """
+    n_past_models = int(ADVERSARY_DISTRIBUTION.sample())
     models = [curr_model for _ in range(4 - n_past_models)]
     past_model_idxs = []
     if n_past_models:
@@ -162,6 +173,7 @@ def select_models(curr_model, past_models):
         ).tolist()
         models.extend([past_models["models"][idx] for idx in past_model_idxs])
     return models, past_model_idxs
+
 
 def train_step(
     train_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
@@ -205,6 +217,7 @@ class ExperienceBuffer:
 
     def is_empty(self):
         return not bool(self.win_inputs)
+
 
 def play_round_async(
     models: list[torch.nn.Module],
@@ -252,7 +265,7 @@ def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models
         )
         past_models["qualities"] = (
             past_models["qualities"][:min_idx] + past_models["qualities"][min_idx + 1]
-        ) 
+        )
     return past_models
 
 
@@ -404,10 +417,7 @@ if __name__ == "__main__":
         default=32,
     )
     parser.add_argument(
-        "--checkpoint",
-        help="Checkpoint to load from.",
-        type=str,
-        default=None
+        "--checkpoint", help="Checkpoint to load from.", type=str, default=None
     )
 
     parser.add_argument(
