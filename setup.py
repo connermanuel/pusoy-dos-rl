@@ -1,3 +1,7 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
-setup(name="pusoy", packages=find_packages())
+setup(
+   name='pusoy',
+   packages=['pusoy'],
+   package_dir={'pusoy': 'pusoy/src'}
+)
