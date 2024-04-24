@@ -1,26 +1,25 @@
-from pusoy.game import Game
-from pusoy.player import Player
-from pusoy.models import A2CLSTM
-from pusoy.decision_function import TrainingDecisionFunction
-from pusoy.losses import ppo_loss
+import argparse
+import copy
+import os
+import pickle as pkl
+from collections import Counter
+from typing import List, Type
 
 import torch
+import torch.nn.functional as F
+from torch.distributions.binomial import Binomial
 from torch.multiprocessing import (
     Pool,
     cpu_count,
-    set_start_method,
     set_sharing_strategy,
+    set_start_method,
 )
-from torch.distributions.binomial import Binomial
-import torch.nn.functional as F
 
-import os
-import argparse
-import copy
-from collections import Counter
-import pickle as pkl
-
-from typing import List, Type
+from pusoy.decision_function import TrainingDecisionFunction
+from pusoy.game import Game
+from pusoy.losses import ppo_loss
+from pusoy.models import A2CLSTM
+from pusoy.player import Player
 
 ADVERSARY_DISTRIBUTION = Binomial(3, 0.2)
 ETA = 0.01

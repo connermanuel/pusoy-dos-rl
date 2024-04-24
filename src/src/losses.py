@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from pusoy.action import Action
-from pusoy.constants import DEVICE, OUTPUT_SIZES
+from pusoy.constants import OUTPUT_SIZES
 from pusoy.models import PusoyModel
 
 
@@ -11,34 +11,33 @@ def ppo_loss(
     prev_model: PusoyModel,
     inputs: torch.Tensor,
     rewards: list[torch.Tensor],
-    batch_masks: tuple[torch.Tensor],
+    batch_masks: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
     eps_clip: float = 0.1,
     gamma: float = 0.99,
     lambd: float = 0.9,
     c_entropy: float = 0.001,
-    device: torch.device = DEVICE,
+    device: torch.device = torch.device("cuda"),
 ) -> torch.Tensor:
     """
     Returns negated reward (positive action should have negative loss) of a batch of
     inputs and actions. For a feed forward model we assume conditional independence.
 
-    The inputs and model should already be on the correct device.
-
     Args:
         curr_model: the current model
         prev_model: the previous model
-        inputs: (batch_size, input_dim) the input to the model representing
-        the game state
-        rewards: (num_sequences, seq_len) a list of reward tensors for each
-            game, where sum(seq_len) = batch_size
-        batch_masks: A tuple of three (batch_size, _) tensors that mask out
-            the cards, hands, and round
+        inputs: (batch_size, input_dim) the input to the model representing the game state
+        rewards: (num_sequences, seq_len) a list of reward tensors for each game, where sum(seq_len) = batch_size
+        batch_masks: A tuple of three (batch_size, n) tensors that mask out the cards, hands, and round
         eps_clip: epsilon for clipping gradient update
         gamma: discount factor for computing advantage estimate
         c_entropy: weight of entropy term (higher alpha = more exploration)
         device: device to perform operations on
     """
-    output, state_values = curr_model.forward(inputs)
+
+    curr_model.to(device)
+    prev_model.to(device)
+
+    output, state_values = curr_model(inputs)
     prev_output = prev_model.act(inputs)
 
     log_probs: list[torch.Tensor] = [F.log_softmax(t, dim=-1) for t in output]
@@ -49,6 +48,8 @@ def ppo_loss(
     adv, critic_loss = gae(state_values, rewards, gamma, lambd, device)
     surr1 = ratios * adv
     surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * adv
+
+    entropy = -torch.sum([p * torch.exp(p) for p in log_probs], dim=-1)
 
     objective = (
         torch.min(surr1, surr2).mean()
@@ -71,8 +72,7 @@ def gae(
 
     Args:
         state_values: (seq_len,) tensor of state values
-        rewards: (seq_len,) a reward tensor corresponding to reward after each action
-            inside a game sequence
+        rewards: (seq_len,) a reward tensor corresponding to reward after each action inside a game sequence
         gamma:
         lambd:
         device:
@@ -131,7 +131,7 @@ def entropy(log_probs, softmax_sizes):
     Calculates entropy of the output batch-wise given the log probabilities.
 
     TO GET THE ENTROPY:
-    - https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/PPO.py#L104C9-L119C42
+    - check out https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/PPO.py#L104C9-L119C42 these lines
     - entropy dist from constant var matrix and predicted action vectors
     """
     ptr = 0
