@@ -68,7 +68,6 @@ def train(
     device -- device to perform operations on
     model_dir -- where to save the models
     """
-    start = 1
     torch.autograd.set_detect_anomaly(True)
 
     train_model = ModelClass(hidden_dim=hidden_dim)
@@ -224,6 +223,7 @@ def play_round_async(
     device="cuda",
     beta=0.1,
 ):
+    """A function that is compatible with"""
     decision_functions = [
         TrainingDecisionFunction(model, device, beta) for model in models
     ]
