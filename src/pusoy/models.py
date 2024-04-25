@@ -8,7 +8,11 @@ from pusoy.constants import OUTPUT_SIZES
 
 
 class PusoyModel(nn.Module, ABC):
-    """Defines the model interface for Pusoy models."""
+    """Defines the model interface for Pusoy models.
+
+    Models output raw logits. All conversion to probabilities should be done
+    in the upstream applications.
+    """
 
     def __init__(self):
         super().__init__()
@@ -113,3 +117,19 @@ class DenseA2C(nn.Module):
         critic_out = critic_out.flatten()
 
         return actor_out, critic_out
+
+
+def create_input_tensor(
+    card_list: torch.Tensor,
+    prev_play: torch.Tensor,
+    played_cards: list[torch.Tensor],
+    round_type: torch.Tensor,
+    hand_type: torch.Tensor,
+    player_no_vec: torch.Tensor,
+    prev_player_vec: torch.Tensor,
+) -> torch.Tensor:
+    """Creates the input to the model based on the provided information."""
+    return torch.cat(
+        [round_type, hand_type, player_no_vec, prev_player_vec, card_list, prev_play]
+        + played_cards
+    )

@@ -1,10 +1,7 @@
 import torch
 
-from pusoy.models import DenseA2C
 
-
-def test_model_basic():
+def test_model_basic(base_model_a2c):
     input = torch.rand(330)
-    model = DenseA2C()
-    _ = model.forward(input)
+    _ = base_model_a2c.forward(input)
     pass
