@@ -15,10 +15,11 @@ from torch.multiprocessing import (
     set_start_method,
 )
 
+from pusoy.constants import DEVICE
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.game import Game
 from pusoy.losses import ppo_loss
-from pusoy.models import A2CLSTM
+from pusoy.models import DenseA2C
 from pusoy.player import Player
 
 ADVERSARY_DISTRIBUTION = Binomial(3, 0.2)
@@ -221,7 +222,7 @@ class ExperienceBuffer:
 def play_round_async(
     models: list[torch.nn.Module],
     past_model_idxs: list[int],
-    device="cuda",
+    device=DEVICE,
     beta=0.1,
 ):
     decision_functions = [
@@ -330,7 +331,7 @@ def main(
     lambd,
 ):
     model_dispatch = {
-        "lstm": A2CLSTM,
+        "base": DenseA2C,
     }
 
     ModelClass = model_dispatch[model]

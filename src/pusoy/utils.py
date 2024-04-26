@@ -164,9 +164,20 @@ def count_cards_per_value(cards: torch.Tensor) -> torch.Tensor:
 
 def card_exists_per_value(cards: torch.Tensor) -> torch.Tensor:
     """For each value, determine if you have at least one card."""
-    return cards.reshape(13, 4).max(dim=1)[0]
+    return cards.reshape(13, 4).max(dim=1)[0].bool()
 
 
 def count_cards_per_suit(cards: torch.Tensor) -> torch.Tensor:
     """For each suit, determine how many cards you have."""
     return cards.reshape(13, 4).sum(dim=0)
+
+
+def indexes_to_one_hot(size: int, idxs: torch.Tensor | list):
+    """
+    Creates an 1D tensor of size `size` where the entries at the indexes `idxs` are one
+    and everything else is zero.
+    """
+
+    tensor = torch.zeros(size)
+    tensor[idxs] = 1
+    return tensor

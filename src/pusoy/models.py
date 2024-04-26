@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from pusoy.constants import OUTPUT_SIZES
+from pusoy.utils import Hands, RoundType
 
 
 class PusoyModel(nn.Module, ABC):
@@ -123,12 +124,23 @@ def create_input_tensor(
     card_list: torch.Tensor,
     prev_play: torch.Tensor,
     played_cards: list[torch.Tensor],
-    round_type: torch.Tensor,
-    hand_type: torch.Tensor,
-    player_no_vec: torch.Tensor,
-    prev_player_vec: torch.Tensor,
+    round_type: RoundType,
+    hand_type: Hands,
+    player_no: int,
+    prev_player: int,
 ) -> torch.Tensor:
     """Creates the input to the model based on the provided information."""
+
+    if prev_play is None:
+        prev_play = torch.zeros(52)
+    player_no_vec, prev_player_vec = torch.zeros(4), torch.zeros(4)
+    player_no_vec[player_no] = 1
+    if prev_player is not None:
+        prev_player_vec[prev_player] = 1
+
+    round_type = round_type.to_tensor(dtype=torch.float)
+    hand_type = hand_type.to_tensor(dtype=torch.float)
+
     return torch.cat(
         [round_type, hand_type, player_no_vec, prev_player_vec, card_list, prev_play]
         + played_cards
