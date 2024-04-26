@@ -62,12 +62,12 @@ class Interactive(DecisionFunction):
         print("\n")
         while True:
             input_str = input(
-                """
-What action would you like to take?\n
-For a list of available cards, type \"show\".\n
-To see the round type, type \"round\".\n
-To see the previous play, type \"prev\".
-"""
+                (
+                    "What action would you like to take?\n"
+                    'For a list of available cards, type "show".\n'
+                    'To see the round type, type "round".\n'
+                    'To see the previous play, type "prev".'
+                )
             )
 
             if input_str == "pass":

@@ -1,5 +1,4 @@
 import argparse
-import copy
 import os
 import pickle as pkl
 from collections import Counter
@@ -92,7 +91,7 @@ def train(
 
     buffer = ExperienceBuffer()
 
-    print(f"Beginning training")
+    print("Beginning training")
     print(f"Cpu count: {cpu_count()}")
     res = [None] * batch_size
     pool = Pool(processes=pool_size)
@@ -178,10 +177,14 @@ def select_models(curr_model, past_models):
 def train_step(
     train_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
 ):
-    win_rewards = [torch.zeros(len(l), device=device) for l in buffer.win_inputs]
+    win_rewards = [
+        torch.zeros(len(episode), device=device) for episode in buffer.win_inputs
+    ]
     for t in win_rewards:
         t[-1] = 1
-    lose_rewards = [torch.zeros(len(l), device=device) for l in buffer.lose_inputs]
+    lose_rewards = [
+        torch.zeros(len(episode), device=device) for episode in buffer.lose_inputs
+    ]
     for t in lose_rewards:
         t[-1] = -1 / 3
 
@@ -284,7 +287,7 @@ def pool_callback(
 
 
 def create_copy(
-    ModelClass: [torch.nn.Module],
+    ModelClass: Type[torch.nn.Module],
     hidden_dim: int,
     model: torch.nn.Module,
     requires_grad: bool = False,

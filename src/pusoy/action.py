@@ -106,9 +106,11 @@ class PlayCards(Action):
             curr_max = torch.nonzero(cards).flatten()[-1].item()
             prev_max = torch.nonzero(game.prev_play).flatten()[-1].item()
             if curr_max < prev_max:
-                raise ValueError(
-                    f"The highest card in the previous move was {idx_to_card(prev_max)}, and you played {idx_to_card(curr_max)}!"
+                err_str = (
+                    f"The highest card in the previous move was {idx_to_card(prev_max)}"
+                    f", and you played {idx_to_card(curr_max)}!"
                 )
+                raise ValueError(err_str)
 
     def ValidHands(self, cards, player, game):
         # Determine what hand it is
@@ -135,7 +137,10 @@ class PlayCards(Action):
         if game.hand_type:
             if hand < game.hand_type:
                 raise ValueError(
-                    f"The last move was a {game.hand_type} which is higher than your {hand}!"
+                    (
+                        f"The last move was a {game.hand_type}"
+                        f"which is higher than your {hand}!"
+                    )
                 )
 
         # If it's a new type of hand, reset the previous play
@@ -161,7 +166,10 @@ class PlayCards(Action):
             prev_value = torch.argmax(prev_cards_per_value)
             if value < prev_value:
                 raise ValueError(
-                    f"The last move was a {game.round_type} of {prev_value}, which is higher than your {value}!"
+                    (
+                        f"The last move was a {game.round_type} of {prev_value}, "
+                        f"which is higher than your {value}!"
+                    )
                 )
 
 

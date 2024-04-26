@@ -2,7 +2,6 @@ from queue import Queue
 
 import torch
 
-from pusoy.decision_function import Interactive, Neural, TrainingDecisionFunction
 from pusoy.player import Player
 from pusoy.utils import Hands, RoundType
 
