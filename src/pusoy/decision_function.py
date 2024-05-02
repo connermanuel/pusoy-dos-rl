@@ -176,10 +176,10 @@ class Neural(DecisionFunction):
         # Feed input through NN, and filter output by available cards
         card_logits, action_logits, hand_logits = self.model.act(input.to(self.device))
 
-        card_logits = card_logits - (1e16 * (1 - card_list))
+        card_logits = card_logits.cpu() - (1e16 * (1 - card_list))
         card_probs = F.softmax(card_logits, dim=0)
-        action_probs = F.softmax(action_logits, dim=0)
-        hand_probs = F.softmax(hand_logits, dim=0)
+        action_probs = F.softmax(action_logits.cpu(), dim=0)
+        hand_probs = F.softmax(hand_logits.cpu(), dim=0)
 
         # Filter the possible round types based on the current round
         is_pending = round_type is RoundType.NONE

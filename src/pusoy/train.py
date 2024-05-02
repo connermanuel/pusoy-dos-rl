@@ -27,7 +27,7 @@ ETA = 0.01
 
 def train(
     ModelClass: Type[torch.nn.Module],
-    hidden_dim: int = 256,
+    hidden_size: int = 256,
     num_models: int = 8,
     epochs: int = 1500,
     batch_size: int = 20,
@@ -50,7 +50,7 @@ def train(
 
     Parameters:
     ModelClass -- class constructor for models
-    hidden_dim -- hidden dimension of models used
+    hidden_size -- hidden dimension of models used
     loss_func -- the function used to evaluate training loss.
     num_models -- number of models to store as adversaries
     epochs -- training epochs
@@ -70,12 +70,11 @@ def train(
     """
     start = 1
     torch.autograd.set_detect_anomaly(True)
-
-    train_model = ModelClass(hidden_dim=hidden_dim)
+    train_model = ModelClass(hidden_size=hidden_size)
     train_model.to(device)
     opt = torch.optim.Adam(train_model.parameters(), lr_actor)
     past_models = {
-        "models": [create_copy(ModelClass, hidden_dim, train_model)],
+        "models": [create_copy(ModelClass, hidden_size, train_model)],
         "qualities": torch.tensor([0.0]),
     }
 
@@ -86,8 +85,8 @@ def train(
             train_model, opt, model_dir, checkpoint
         )
 
-    prev_model = create_copy(ModelClass, hidden_dim, train_model)
-    rollout_model = create_copy(ModelClass, hidden_dim, train_model)
+    prev_model = create_copy(ModelClass, hidden_size, train_model)
+    rollout_model = create_copy(ModelClass, hidden_size, train_model)
 
     buffer = ExperienceBuffer()
 
@@ -124,7 +123,7 @@ def train(
         past_models = update_qualities(epoch_buffer, past_models)
         if not epoch % opponent_steps:
             past_models = update_opponents(
-                past_models, ModelClass, train_model, hidden_dim, num_models
+                past_models, ModelClass, train_model, hidden_size, num_models
             )
 
         [r.wait() for r in res]
@@ -233,7 +232,10 @@ def play_round_async(
     ]
     players = [Player(i, func) for i, func in enumerate(decision_functions)]
     game = Game(players)
-    game.play()
+    try:
+        game.play()
+    except Exception as e:
+        print(e)
 
     losing_instances = []
     for p in players:
@@ -253,8 +255,8 @@ def update_qualities(buffer, past_models):
     return past_models
 
 
-def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models):
-    past_models["models"].append(create_copy(ModelClass, hidden_dim, curr_model))
+def update_opponents(past_models, ModelClass, curr_model, hidden_size, num_models):
+    past_models["models"].append(create_copy(ModelClass, hidden_size, curr_model))
     past_models["qualities"] = torch.cat(
         (
             past_models["qualities"],
@@ -264,10 +266,10 @@ def update_opponents(past_models, ModelClass, curr_model, hidden_dim, num_models
     while len(past_models["models"]) > num_models:
         min_idx = torch.argmin(past_models["qualities"])
         past_models["models"] = (
-            past_models["models"][:min_idx] + past_models["models"][min_idx + 1]
+            past_models["models"][:min_idx] + [past_models["models"][min_idx + 1]]
         )
         past_models["qualities"] = (
-            past_models["qualities"][:min_idx] + past_models["qualities"][min_idx + 1]
+            past_models["qualities"][:min_idx] + [past_models["qualities"][min_idx + 1]]
         )
     return past_models
 
@@ -288,11 +290,11 @@ def pool_callback(
 
 def create_copy(
     ModelClass: Type[torch.nn.Module],
-    hidden_dim: int,
+    hidden_size: int,
     model: torch.nn.Module,
     requires_grad: bool = False,
 ):
-    model_copy = ModelClass(hidden_dim=hidden_dim)
+    model_copy = ModelClass(hidden_size=hidden_size)
     model_copy.requires_grad_(requires_grad)
     model_copy.load_state_dict(model.state_dict())
     return model_copy
@@ -324,7 +326,7 @@ def main(
     checkpoint,
     opponent_steps,
     model,
-    hidden_dim,
+    hidden_size,
     lr_actor,
     lr_critic,
     c_entropy,
@@ -341,7 +343,7 @@ def main(
 
     train(
         ModelClass,
-        hidden_dim,
+        hidden_size,
         num_models=num_models,
         epochs=epochs,
         batch_size=batch_size,
@@ -426,13 +428,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m",
         "--model",
-        help="Model architecture to train. Defaults to LSTM.",
-        choices=["lstm"],
+        help="Model architecture to train. Defaults to base DenseA2C.",
+        choices=["base"],
         type=str,
-        default="lstm",
+        default="base",
     )
     parser.add_argument(
-        "--hidden_dim",
+        "--hidden_size",
         help="Change the hidden dim of the models. Defaults to 256.",
         type=int,
         default=256,

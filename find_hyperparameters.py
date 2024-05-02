@@ -35,7 +35,7 @@ model_dispatch = {
 def build_model_from_args(model_class: str, whale_args: torch.Tensor, args: argparse.Namespace):
     """Builds and trains a model of the specified type corresponding to the args, and saves to directory."""
 
-    hidden_dim = int(2**whale_args[0])
+    hidden_size = int(2**whale_args[0])
     lr_actor = 10**whale_args[1]
     lr_critic = 10**whale_args[2]
     alpha = 10**whale_args[3]
@@ -45,12 +45,12 @@ def build_model_from_args(model_class: str, whale_args: torch.Tensor, args: argp
 
     if os.path.exists(f"{output_dir}/{args.epochs}.pt"):
         print(f"Loading whale from checkpoint: {whale_args}")
-        model = model_dispatch[model_class](hidden_dim = hidden_dim)
+        model = model_dispatch[model_class](hidden_size = hidden_size)
         model.load_state_dict(torch.load(f"{output_dir}/{args.epochs}.pt"))
     else:
         print(f"Training whale: {whale_args}")
         model = tr_main(pool_size=args.pool_size, batch_size=args.batch_size, epochs=args.epochs, er_mult=args.er_mult, save_steps=args.save_steps,
-        method=args.method, output_dir=output_dir, model=model_class, hidden_dim=hidden_dim, lr_actor=lr_actor, lr_critic=lr_critic, alpha=alpha, gamma=gamma)
+        method=args.method, output_dir=output_dir, model=model_class, hidden_size=hidden_size, lr_actor=lr_actor, lr_critic=lr_critic, alpha=alpha, gamma=gamma)
 
     return model
     
