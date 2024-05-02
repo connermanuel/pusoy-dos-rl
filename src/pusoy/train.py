@@ -17,7 +17,7 @@ from torch.multiprocessing import (
 from pusoy.constants import DEVICE
 from pusoy.decision_function import TrainingDecisionFunction
 from pusoy.game import Game
-from pusoy.losses import ppo_loss
+from pusoy.losses import ppo_loss, batch_generate_mask
 from pusoy.models import DenseA2C
 from pusoy.player import Player
 
@@ -191,12 +191,14 @@ def train_step(
     actions = buffer.win_actions + buffer.lose_actions
     rewards = win_rewards + lose_rewards
 
+    batch_masks = batch_generate_mask(actions)
+
     loss = ppo_loss(
         train_model,
         prev_model,
         inputs,
-        actions,
         rewards,
+        batch_masks,
         eps_clip=eps,
         gamma=gamma,
         lambd=lambd,
