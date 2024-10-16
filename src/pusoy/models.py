@@ -167,7 +167,7 @@ def get_probs_from_logits(
     hand_type: Hands | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return the selection probabilities based on the provided logits.
-    Optionally performs masking if a round type or hand type is provided.
+    Optionally performs masking if a card list, round type, or hand type is provided.
     
     Args:
         logits: (output_dim) tensor from the model
@@ -184,16 +184,16 @@ def get_probs_from_logits(
     action_logits = logits[52:57]
     hand_logits = logits[57:]
 
-    if card_list:
+    if card_list is not None:
         card_logits = card_logits - (1e16 * (1 - card_list))
     
-    if round_type:
+    if round_type is not None:
         action_mask = round_type.to_tensor(dtype=torch.bool)
         action_mask[1:] ^= action_mask[0]
         action_mask[0] ^= True
-        action_logits = action_logits - (1e16 * (1 - action_mask))
+        action_logits = action_logits - (1e16 * (1 - action_mask.float()))
     
-    if hand_type:
+    if hand_type is not None:
         min_hand = max(hand_type.value - 1, 0)
         hand_logits[:min_hand] -= 1e16
     
