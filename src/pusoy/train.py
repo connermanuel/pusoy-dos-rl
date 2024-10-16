@@ -48,25 +48,25 @@ def train(
     """
     Trains curr_model using self-play.
 
-    Parameters:
-    ModelClass -- class constructor for models
-    hidden_size -- hidden dimension of models used
-    loss_func -- the function used to evaluate training loss.
-    num_models -- number of models to store as adversaries
-    epochs -- training epochs
-    batch_size -- number of games to play in each epoch
-    experience_replay_mult -- sets experience replay size to (batch_size * experience replay mult)
-    method -- whether to use process or pool
-    lr_actor -- learning rate for actor
-    lr_critic -- learning rate for critic
-    eps -- epsilon for loss function clipping
-    gamma -- discount factor for rewards
-    c_entropy -- entropy factor
-    beta -- exploration parameter
-    pool_size -- number of processes to spawn
-    save_steps -- number of steps to take before saving
-    device -- device to perform operations on
-    model_dir -- where to save the models
+    Args:
+        ModelClass: class constructor for models
+        hidden_size: hidden dimension of models used
+        loss_func: the function used to evaluate training loss.
+        num_models: number of models to store as adversaries
+        epochs: training epochs
+        batch_size: number of games to play in each epoch
+        experience_replay_mult: sets experience replay size to (batch_size * experience replay mult)
+        method: whether to use process or pool
+        lr_actor: learning rate for actor
+        lr_critic: learning rate for critic
+        eps: epsilon for loss function clipping
+        gamma: discount factor for rewards
+        c_entropy: entropy factor
+        beta: exploration parameter
+        pool_size: number of processes to spawn
+        save_steps: number of steps to take before saving
+        device: device to perform operations on
+        model_dir: where to save the models
     """
     start = 1
     torch.autograd.set_detect_anomaly(True)
@@ -106,18 +106,17 @@ def train(
                 callback=(lambda result: pool_callback(result, epoch_buffer)),
             )
 
-        if not buffer.is_empty():
-            train_step(
-                train_model,
-                prev_model,
-                opt,
-                buffer,
-                device,
-                eps,
-                gamma,
-                lambd,
-                c_entropy,
-            )
+        train_step(
+            train_model,
+            prev_model,
+            opt,
+            buffer,
+            device,
+            eps,
+            gamma,
+            lambd,
+            c_entropy,
+        )
 
         prev_model.load_state_dict(rollout_model.state_dict())
         past_models = update_qualities(epoch_buffer, past_models)
@@ -176,6 +175,9 @@ def select_models(curr_model, past_models):
 def train_step(
     train_model, prev_model, opt, buffer, device, eps, gamma, lambd, c_entropy
 ):
+    if buffer.is_empty():
+        return
+    
     win_rewards = [
         torch.zeros(len(episode), device=device) for episode in buffer.win_inputs
     ]
@@ -296,6 +298,7 @@ def create_copy(
     model: torch.nn.Module,
     requires_grad: bool = False,
 ):
+    """Creates a copy of the model with the same weights."""
     model_copy = ModelClass(hidden_size=hidden_size)
     model_copy.requires_grad_(requires_grad)
     model_copy.load_state_dict(model.state_dict())

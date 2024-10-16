@@ -10,7 +10,7 @@ def ppo_loss(
     curr_model: PusoyModel,
     prev_model: PusoyModel,
     inputs: torch.Tensor,
-    rewards: list[torch.Tensor],
+    adv: torch.Tensor,
     batch_masks: tuple[torch.Tensor],
     eps_clip: float = 0.1,
     gamma: float = 0.99,
@@ -29,14 +29,17 @@ def ppo_loss(
         prev_model: the previous model
         inputs: (batch_size, input_dim) the input to the model representing
         the game state
-        rewards: (num_sequences, seq_len) a list of reward tensors for each
-            game, where sum(seq_len) = batch_size
+        adv: (batch_size) tensor of advantages at each timestep. The most basic version
+        is simply a 1 or -1/3 at the end of each game.
         batch_masks: A tuple of three (batch_size, _) tensors that mask out
             the cards, hands, and round
         eps_clip: epsilon for clipping gradient update
         gamma: discount factor for computing advantage estimate
         c_entropy: weight of entropy term (higher alpha = more exploration)
         device: device to perform operations on
+    
+    Returns:
+        A tensor corresponding to the PPO loss.
     """
     output, state_values = curr_model.forward(inputs)
     prev_output = prev_model.act(inputs)
@@ -46,7 +49,7 @@ def ppo_loss(
     ratios = [torch.exp(t - prev_t) for t, prev_t in zip(log_probs, prev_log_probs)]
     ratios = [r * b for r, b in zip(ratios, batch_masks)]
 
-    adv, critic_loss = gae(state_values, rewards, gamma, lambd, device)
+    critic_loss = F.mse_loss(state_values, state_values + adv)
     surr1 = ratios * adv
     surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * adv
 
@@ -65,7 +68,7 @@ def gae(
     gamma: float = 0.99,
     lambd: float = 0.9,
     device: torch.device = torch.device("cuda"),
-):
+) -> torch.Tensor:
     """
     Computes the generalized advantage estimate over time for a specific
 
@@ -89,7 +92,7 @@ def gae(
     ).to(device)
     adv = matrix @ td_estimates
 
-    return adv, F.mse_loss(state_values, state_values + adv)
+    return adv
 
 
 def td(values, gamma, lambd, rewards, device, cum_lengths):
@@ -105,9 +108,10 @@ def batch_generate_mask(actions: list[Action], device) -> torch.Tensor:
 
     Args:
         actions: A list of actions corresponding to a played game.
+        device: The device on which to place the batch mask.
 
     Returns:
-        A boolean tensor that masks out the relevant logits for the selected action.
+        A boolean tensor with shape (output_dim,) that masks out the relevant logits for the selected action.
     """
     card_tensors, round_tensors, hand_tensors = tuple(
         zip(
