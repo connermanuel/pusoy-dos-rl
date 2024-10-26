@@ -113,20 +113,20 @@ class Neural(DecisionModule):
     """
 
     model: PusoyModel
-    action_funcs = [
+    action_funcs: list[parsing_functions.ParsingFunction] = [
         parsing_functions.return_pass,
         parsing_functions.find_best_single,
         parsing_functions.find_best_pair,
         parsing_functions.find_best_triple
     ]
-    hand_funcs = [
+    hand_funcs: list[parsing_functions.ParsingFunction]  = [
         parsing_functions.find_best_straight,
         parsing_functions.find_best_flush,
         parsing_functions.find_best_full_house,
         parsing_functions.find_best_four_hand,
         parsing_functions.find_best_straight_flush,
     ]
-    selection_function = staticmethod(selection_functions.selection_function_eval)
+    selection_function: selection_functions.SelectionFunction = staticmethod(selection_functions.selection_function_eval)
 
     def __init__(
         self,

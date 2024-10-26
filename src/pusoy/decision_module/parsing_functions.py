@@ -1,7 +1,7 @@
 import torch
 from typing import Callable
 
-from pusoy.action import Pass, PlayCards
+from pusoy.action import Action, Pass, PlayCards
 from pusoy.utils import (
     Hands,
     RoundType,
@@ -12,7 +12,7 @@ from pusoy.utils import (
 )
 from pusoy.decision_module.selection_functions import SelectionFunction
 
-# Define the SelectionFunction type
+ParsingFunction = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, Hands, bool, bool, SelectionFunction], Action | None]
 
 
 def find_best_single(
@@ -444,7 +444,13 @@ def find_best_straight_flush(
     return best_action
 
 def return_pass(
-    output, card_list, prev_play, hand_type, is_pending, is_first_move
+    card_probs: torch.Tensor,
+    card_list: torch.Tensor,
+    prev_play: torch.Tensor,
+    hand_type: Hands,
+    is_pending: bool,
+    is_first_move: bool,
+    selection_function: SelectionFunction
 ) -> Pass:
     return Pass(cards=torch.zeros(52))
 
