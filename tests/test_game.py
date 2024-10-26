@@ -1,4 +1,4 @@
-from pusoy.decision_function import Neural
+from pusoy.decision_module import Neural
 from pusoy.game import Game
 from pusoy.player import Player
 

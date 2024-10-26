@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 import torch
-import torch.nn.functional as F
 
 from pusoy.action import Pass, PlayCards
 from pusoy.constants import DEVICE
@@ -11,7 +10,9 @@ from pusoy.utils import (
     Hands,
     RoundType,
     string_to_card,
+    print_cards
 )
+from pusoy.decision_module import parsing_functions, selection_functions
 
 
 class DecisionModule(ABC):
@@ -113,19 +114,19 @@ class Neural(DecisionModule):
 
     model: PusoyModel
     action_funcs = [
-        return_pass,
-        find_best_single,
-        find_best_pair,
-        find_best_triple
+        parsing_functions.return_pass,
+        parsing_functions.find_best_single,
+        parsing_functions.find_best_pair,
+        parsing_functions.find_best_triple
     ]
     hand_funcs = [
-        find_best_straight,
-        find_best_flush,
-        find_best_full_house,
-        find_best_four_hand,
-        find_best_straight_flush,
+        parsing_functions.find_best_straight,
+        parsing_functions.find_best_flush,
+        parsing_functions.find_best_full_house,
+        parsing_functions.find_best_four_hand,
+        parsing_functions.find_best_straight_flush,
     ]
-    selection_function = staticmethod(selection_function_eval)
+    selection_function = staticmethod(selection_functions.selection_function_eval)
 
     def __init__(
         self,
@@ -255,5 +256,5 @@ class Neural(DecisionModule):
 
 
 class TrainingNeural(Neural):
-    selection_function = staticmethod(selection_function_train)
+    selection_function = staticmethod(selection_functions.selection_function_train)
 

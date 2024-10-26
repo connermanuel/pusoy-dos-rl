@@ -1,6 +1,7 @@
 import torch
 from typing import Callable
 
+from pusoy.action import Pass, PlayCards
 from pusoy.utils import (
     Hands,
     RoundType,
@@ -9,9 +10,10 @@ from pusoy.utils import (
     count_cards_per_value,
     indexes_to_one_hot,
 )
+from pusoy.decision_module.selection_functions import SelectionFunction
 
 # Define the SelectionFunction type
-SelectionFunction = Callable[[torch.Tensor, int], int]
+
 
 def find_best_single(
     card_probs: torch.Tensor,
@@ -140,7 +142,7 @@ def find_best_k_of_a_number(
         scores.append(torch.sum(top_vals))
         moves.append(top_idxs + (value * 4))
 
-    best_move_idx = selection_function(torch.Tensor(scores), 1)[0]
+    best_move_idx = selection_function(torch.Tensor(scores), 1)
     best_move = moves[best_move_idx]
 
     cards = indexes_to_one_hot(52, best_move)
@@ -186,18 +188,20 @@ def find_best_straight(
         (card_probs * valid_last_card_list).reshape(13, 4).max(dim=1)
     )
 
-    valid_idxs = torch.nonzero(valid)
+    valid_idxs = torch.nonzero(valid).flatten()
 
     # Generate a score for each possible straight.
-    # The score is defined as the max value for the bottom 4 cards, and the max
-    # value for the 5th card from the options that trump the highest card available.
+    # Motivating example for defining the last card separately:
+    # Suppose in the last round, the highest card played was 7S. 7C would not be a valid last card,
+    # but it would still be valid in the middle of the straight.
+    idxs_first_four_cards = valid_idxs.unsqueeze(1) + torch.arange(4).unsqueeze(0)
     scores = (
-        torch.sum(max_values[valid_idxs + torch.arange(4)], axis=1)
-        + last_max_values[valid_idxs.flatten() + 4]
+        torch.sum(max_values[idxs_first_four_cards], dim=1)
+        + last_max_values[valid_idxs + 4]
     )
-    best_option_value = valid_idxs[selection_function(scores, 1)].item()
+    best_option_value: int = int(valid_idxs[selection_function(scores, 1)].item())
 
-    best_idxs = torch.zeros(5).to(torch.long)
+    best_idxs = torch.zeros(5, dtype=torch.long)
     best_idxs[:4] = max_idxs[best_option_value : best_option_value + 4] + (
         torch.arange(best_option_value, best_option_value + 4) * 4
     )
@@ -233,8 +237,8 @@ def find_best_flush(
         prev_highest = get_prev_highest(prev_play)
         valid_last_cards[torch.arange(52) < prev_highest] = False
 
-    scores = [1e-9]
-    options = [None]
+    scores = []
+    options = []
 
     for suit, suit_bool in enumerate(contains_flush):
         if suit_bool:
@@ -267,15 +271,14 @@ def find_best_flush(
             score = torch.sum(top_vals).item()
             scores.append(score)
             options.append(top_idxs * 4 + suit)
+    
+    if not options:
+        return None
 
     best_option = options[selection_function(torch.Tensor(scores), 1)]
-
-    if best_option is not None:
-        tensor = torch.zeros(52)
-        tensor[best_option] = 1
-        best_option = PlayCards(tensor, RoundType.HANDS, Hands.FLUSH)
-
-    return best_option
+    tensor = torch.zeros(52)
+    tensor[best_option] = 1
+    return PlayCards(tensor, RoundType.HANDS, Hands.FLUSH)
 
 def find_best_full_house(
     card_probs: torch.Tensor,
@@ -298,7 +301,7 @@ def find_best_full_house(
         prev_play = prev_play * mask
 
     best_triple = find_best_triple(
-        card_probs, card_list, prev_play, hand_type, is_pending, is_first_move
+        card_probs, card_list, prev_play, hand_type, is_pending, is_first_move, selection_function
     )
 
     if best_triple is None:
@@ -313,10 +316,10 @@ def find_best_full_house(
     # If it is the first move and you already included it in the triple,
     # no need to include it in the pair!
     if best_triple.cards[0]:
-        is_first_move = 0
+        is_first_move = False
     # Pair has is_pending enabled, because you can do any pair
     best_pair = find_best_pair(
-        card_probs, card_list, prev_play, hand_type, 1, is_first_move
+        card_probs, card_list, prev_play, hand_type, True, is_first_move, selection_function
     )
     if best_pair is None:
         return None
@@ -334,6 +337,12 @@ def find_best_four_hand(
     is_first_move: bool,
     selection_function: SelectionFunction
 ) -> PlayCards | None:
+    """Find the best four of a kind hand to play.
+
+    First selects the best four cards, then selects the best single card to complement.
+    Both need to return valid moves, to construct a hand.
+    Otherwise, return None.
+    """
 
     if hand_type.value < 4:
         is_pending = True
@@ -346,7 +355,13 @@ def find_best_four_hand(
         prev_play = prev_play * mask
 
     best_four = find_best_four(
-        card_probs, card_list, prev_play, hand_type, is_pending, 0
+        card_probs=card_probs, 
+        card_list=card_list, 
+        prev_play=prev_play, 
+        hand_type=hand_type, 
+        is_pending=is_pending, 
+        is_first_move=False, 
+        selection_function=selection_function
     )
 
     if best_four is None:
@@ -355,11 +370,18 @@ def find_best_four_hand(
     # If it is the first move and you already included it in the four,
     # no need to include it in the single!
     if best_four.cards[0]:
-        is_first_move = 0
+        is_first_move = False
     card_list = card_list * (1 - best_four.cards)
     card_probs = card_probs * card_list
+
     best_single = find_best_single(
-        card_probs, card_list, prev_play, hand_type, 1, is_first_move
+        card_probs=card_probs, 
+        card_list=card_list, 
+        prev_play=prev_play, 
+        hand_type=hand_type, 
+        is_pending=True, 
+        is_first_move=is_first_move, 
+        selection_function=selection_function
     )
     if best_single is None:
         return None
@@ -390,8 +412,8 @@ def find_best_straight_flush(
 
     contains_flush = count_cards_per_suit(card_list) >= 5
 
-    scores = [1e-9]
-    actions = [None]
+    scores = []
+    actions = []
 
     for suit, suit_bool in enumerate(contains_flush):
         if suit_bool:
@@ -406,37 +428,27 @@ def find_best_straight_flush(
                 hand_type,
                 is_pending,
                 is_first_move,
+                selection_function,
             )
 
             if best_straight is not None:
                 score = torch.sum(card_probs[best_straight.cards.to(torch.bool)])
-                scores.append(score)
+                scores.append(score.item())
                 actions.append(best_straight)
-
+    
+    if not actions:
+        return None
+    
     best_action = actions[selection_function(torch.Tensor(scores), 1)]
-    if best_action is not None:
-        best_action.hands = Hands.STRAIGHT_FLUSH
+    best_action.hand = Hands.STRAIGHT_FLUSH
     return best_action
 
 def return_pass(
     output, card_list, prev_play, hand_type, is_pending, is_first_move
-):
+) -> Pass:
     return Pass(cards=torch.zeros(52))
 
 def get_prev_highest(prev_play: torch.Tensor) -> int:
     """Gets the highest index of the previous play"""
-    return torch.nonzero(prev_play).flatten()[-1].item()
+    return int(torch.nonzero(prev_play).flatten()[-1].item())
 
-def selection_function_train(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
-    """
-    Given a tensor of probabilities, return an ordered tensor of indices.
-    During training, the selection function is a multinomial distribution.
-    """
-    return torch.multinomial(probs, num_samples, replacement=True)
-
-def selection_function_eval(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
-    """
-    Given a tensor of probabilities, return an ordered tensor of indices.
-    During evaluation, the selection function is a maximum function.
-    """
-    return torch.topk(input=probs, k=num_samples)[1]
