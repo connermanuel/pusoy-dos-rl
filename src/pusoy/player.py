@@ -1,5 +1,3 @@
-from pusoy.utils import Card
-from pusoy.decision_function import Interactive
 import torch
 
 class Player():
@@ -36,8 +34,4 @@ class Player():
     
     def __str__(self):
         return f"player {self.number}"
-
-class InteractivePlayer(Player):
-    def __init__(self, game, number, decision_function):
-        super().__init__(game, number, Interactive())
 

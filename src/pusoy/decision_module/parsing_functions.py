@@ -1,12 +1,6 @@
-from abc import ABC, abstractmethod
+import torch
 from typing import Callable
 
-import torch
-import torch.nn.functional as F
-
-from pusoy.action import Pass, PlayCards
-from pusoy.constants import DEVICE
-from pusoy.models import PusoyModel, create_input_tensor, get_probs_from_logits
 from pusoy.utils import (
     Hands,
     RoundType,
@@ -14,86 +8,10 @@ from pusoy.utils import (
     count_cards_per_suit,
     count_cards_per_value,
     indexes_to_one_hot,
-    print_cards,
-    string_to_card,
 )
 
-
-class DecisionFunction(ABC):
-    """
-    Defines the process for making a decision, given the input state.
-    """
-
-    def __init__(self):
-        pass
-
-    @abstractmethod
-    def play(
-        self,
-        player_no,
-        card_list,
-        round_type,
-        hand_type,
-        prev_play,
-        prev_player,
-        played_cards,
-        is_first_move,
-    ):
-        pass
-
-
-class Interactive(DecisionFunction):
-    def __init__(self, device=DEVICE):
-        self.device = device
-
-    def play(
-        self,
-        player_no,
-        card_list,
-        round_type,
-        hand_type,
-        prev_play,
-        prev_player,
-        played_cards,
-        is_first_move,
-    ):
-        """Returns a 52-len binary tensor of played cards or a pass action."""
-        print(f"\nNow playing: Player {player_no}")
-        print("\n")
-        while True:
-            input_str = input(
-                (
-                    "What action would you like to take?\n"
-                    'For a list of available cards, type "show".\n'
-                    'To see the round type, type "round".\n'
-                    'To see the previous play, type "prev".'
-                )
-            )
-
-            if input_str == "pass":
-                return Pass()
-
-            elif input_str == "show":
-                print_cards(card_list)
-
-            elif input_str == "round":
-                print(round_type)
-                if round_type.value == 5:
-                    print(hand_type)
-
-            elif input_str == "prev":
-                print_cards(prev_play)
-
-            else:
-                cards = torch.zeros(52)
-                cards_strs = input_str.split()
-                try:
-                    for card_str in cards_strs:
-                        card = string_to_card(card_str)
-                        cards[card.__hash__()] = 1
-                    return PlayCards(cards)
-                except ValueError:
-                    print("Sorry, I couldn't quite understand that.")
+# Define the SelectionFunction type
+SelectionFunction = Callable[[torch.Tensor, int], int]
 
 def find_best_single(
     card_probs: torch.Tensor,
@@ -102,7 +20,7 @@ def find_best_single(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     """
     Selects a single card to play based on probabilities.
@@ -128,10 +46,10 @@ def find_best_pair(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     return find_best_k_of_a_number(
-        2, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move
+        2, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move, selection_function
     )
 
 def find_best_triple(
@@ -141,10 +59,10 @@ def find_best_triple(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     return find_best_k_of_a_number(
-        3, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move
+        3, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move, selection_function
     )
 
 def find_best_four(
@@ -154,10 +72,10 @@ def find_best_four(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     return find_best_k_of_a_number(
-        4, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move
+        4, card_probs, card_list, prev_play, hand_type, is_pending, is_first_move, selection_function
     )
 
 def find_best_k_of_a_number(
@@ -168,7 +86,7 @@ def find_best_k_of_a_number(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     """
     Finds the best move that plays k of a number. Used for finding pairs,
@@ -181,7 +99,7 @@ def find_best_k_of_a_number(
     # If k=1, redirect to find_best_single:
     if k == 1:
         return find_best_single(
-            card_probs, card_list, prev_play, hand_type, is_pending, is_first_move
+            card_probs, card_list, prev_play, hand_type, is_pending, is_first_move, selection_function
         )
 
     # If first move, force selection of 3C, then select the rest of the cards
@@ -190,7 +108,7 @@ def find_best_k_of_a_number(
         card_list[4:] = 0
         card_probs = card_probs * card_list
         other_cards = find_best_k_of_a_number(
-            k - 1, card_probs, card_list, prev_play, hand_type, is_pending, False
+            k - 1, card_probs, card_list, prev_play, hand_type, is_pending, False, selection_function
         )
         if not other_cards:
             return None
@@ -235,7 +153,7 @@ def find_best_straight(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: Callable
 ) -> PlayCards | None:
 
     if is_first_move:
@@ -297,7 +215,7 @@ def find_best_flush(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
 
     if hand_type.value < 2:
@@ -346,7 +264,7 @@ def find_best_flush(
                 # Otherwise, just choose 5 of whatever you have
                 top_idxs = selection_function(output_in_suit, 5)
                 top_vals = output_in_suit[top_idxs]
-            score = torch.sum(top_vals)
+            score = torch.sum(top_vals).item()
             scores.append(score)
             options.append(top_idxs * 4 + suit)
 
@@ -366,7 +284,7 @@ def find_best_full_house(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
 
     if hand_type.value < 3:
@@ -414,7 +332,7 @@ def find_best_four_hand(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
 
     if hand_type.value < 4:
@@ -457,7 +375,7 @@ def find_best_straight_flush(
     hand_type: Hands,
     is_pending: bool,
     is_first_move: bool,
-    selection_function: callable
+    selection_function: SelectionFunction
 ) -> PlayCards | None:
     # If it is the first move, only possible straight flush is 3C 4C 5C 6C 7C
     if is_first_move:
@@ -509,186 +427,16 @@ def get_prev_highest(prev_play: torch.Tensor) -> int:
     """Gets the highest index of the previous play"""
     return torch.nonzero(prev_play).flatten()[-1].item()
 
-class Neural(DecisionFunction):
+def selection_function_train(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
     """
-    Makes decisions based on a neural network's parameters.
-    Input of the NN should have the following parameters:
-      5 - round type
-      5 - hand type
-      4 - curr. player
-      4 - previous player
-      52 - card list
-      52 - previously played round
-      204 - cards previously played by all players in order from 0 to 3.
-    for a total of 330 input parameters.
-    Output should have the following parameters, all passed through a sigmoid function:
-      52 - (one for each card)
-      5 - one for each round type (pass, singles, doubles, triples, hands)
-      5 - one for each hand type (straight, flush, full house, four, straight flush)
-      for a total of 62 output parameters.
-    Stores a list of instances, which are tuples of (input, action) pairs for training.
+    Given a tensor of probabilities, return an ordered tensor of indices.
+    During training, the selection function is a multinomial distribution.
     """
+    return torch.multinomial(probs, num_samples, replacement=True)
 
-    model: PusoyModel
-    action_funcs = [
-        return_pass,
-        find_best_single,
-        find_best_pair,
-        find_best_triple
-    ]
-    hand_funcs = [
-        find_best_straight,
-        find_best_flush,
-        find_best_full_house,
-        find_best_four_hand,
-        find_best_straight_flush,
-    ]
-
-    def __init__(
-        self,
-        model: PusoyModel,
-        device: torch.device = DEVICE,
-        eps: float = 0,
-        debug: bool = False,
-    ):
-        self.model = model.to(device)
-        self.instances = {"inputs": [], "actions": []}
-        self.device = device
-        self.eps = eps
-        self.debug = debug
-
-    def selection_function(self, probs, num_samples) -> torch.Tensor:
-        """
-        Given a tensor of probabilities, return an ordered tensor of indices.
-        During training, the selection function is a multinomial distribution.
-        During evaluation, the selection function is a maximum function."""
-
-        return torch.topk(input=probs, k=num_samples)[1]
-
-    def play(
-        self: DecisionFunction,
-        player_no: int,
-        card_list: torch.Tensor,
-        round_type: RoundType,
-        hand_type: Hands,
-        prev_play: torch.Tensor,
-        prev_player: int,
-        played_cards: list[torch.Tensor],
-        is_first_move: bool,
-    ):
-        # Process player's cardlist, previous round, and previously played cards.
-        input = create_input_tensor(
-            card_list,
-            prev_play,
-            played_cards,
-            round_type,
-            hand_type,
-            player_no,
-            prev_player,
-        )
-
-        # Feed input through NN, and filter output by available cards
-        logits = self.model.act(input.to(self.device))
-        card_probs, action_probs, hand_probs = get_probs_from_logits(
-            logits, card_list, round_type, hand_type
-        )
-
-        # Filter the possible round types based on the current round
-        is_pending = round_type is RoundType.NONE
-        action_funcs = self.get_action_funcs(
-            action_probs,
-            hand_probs,
-            round_type,
-            hand_type,
-        )
-
-        for action_func in action_funcs:
-            action = action_func(
-                card_probs.clone(),
-                card_list.clone(),
-                prev_play,
-                hand_type,
-                is_pending,
-                is_first_move,
-            )
-            if action:
-                self.instances["inputs"].append(input)
-                self.instances["actions"].append(action)
-                return action
-
-        raise ValueError("No possible actions found!")
-
-    def get_action_funcs(
-        self,
-        action_probs: torch.Tensor,
-        hand_probs: torch.Tensor,
-        round_type: RoundType,
-        hand_type: Hands,
-    ) -> list[Callable]:
-        """
-        Returns a list of action-generating functions in order based on the
-        predicted logits for different actions and hand types.
-
-        Args:
-            action_probs: Probabilities for taking each action
-            hand_probs: Probabilities for playing each hand
-            round_type: Round being played
-            hand_type: Previous hand played
-
-        Returns:
-            An ordered list of action generating functions.
-        """
-        action_mask = round_type.to_tensor(dtype=torch.bool)
-        action_mask[1:] ^= action_mask[0]
-        action_mask[0] ^= True
-
-        action_funcs = []
-        base_action_order = self.selection_function(action_probs, 5)
-        action_order = [i for i in base_action_order if action_mask[i]]
-
-        for i in action_order:
-            if i == 4:
-                action_funcs.extend(self.get_hand_funcs(hand_probs, hand_type))
-            else:
-                action_funcs.append(self.action_funcs[i])
-
-        return action_funcs
-
-    def get_hand_funcs(
-        self, hand_probs: torch.Tensor, hand_type: Hands
-    ) -> list[Callable]:
-        """
-        Returns a list of action-generating functions that play different hands
-        in order based on the predicted logits.
-
-        Args:
-            hand_probs: Probabilities for playing each hand
-            hand_type: Previous hand played
-
-        Returns:
-            An ordered list of action generating functions for playing hands.
-        """
-        min_hand = max(hand_type.value - 1, 0)
-        masked_funcs = self.hand_funcs[min_hand:]
-        masked_vals = hand_probs[min_hand:]
-
-        action_order = self.selection_function(masked_vals, masked_vals.shape[0])
-        return [masked_funcs[i] for i in action_order]
-
-    def clear_instances(self):
-        self.instances = []
-
-
-class TrainingDecisionFunction(Neural):
-    def selection_function(self: Neural, probs: torch.Tensor, num_samples: int):
-        """Use multinomial selection for training."""
-        if self.debug:
-            print(probs)
-        return torch.multinomial(probs, num_samples)
-
-import torch
-
-from pusoy.action import Pass, PlayCards
-from pusoy.utils import Hands, RoundType, card_exists_per_value, count_cards_per_suit, count_cards_per_value, indexes_to_one_hot
-
-
+def selection_function_eval(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
+    """
+    Given a tensor of probabilities, return an ordered tensor of indices.
+    During evaluation, the selection function is a maximum function.
+    """
+    return torch.topk(input=probs, k=num_samples)[1]

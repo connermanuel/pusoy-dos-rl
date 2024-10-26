@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from pusoy.decision_function import TrainingDecisionFunction
+from pusoy.decision_module import Neural, TrainingNeural
 from pusoy.models import DenseA2C
 
 
@@ -14,7 +14,7 @@ def base_model_a2c():
 @pytest.fixture
 def base_training_decision_function(base_model_a2c):
     """Training df using the base model."""
-    return TrainingDecisionFunction(base_model_a2c)
+    return TrainingNeural(base_model_a2c)
 
 
 @pytest.fixture
@@ -24,3 +24,7 @@ def random_hand():
     cards = torch.zeros(52)
     cards[idxs] = 1
     return cards
+
+@pytest.fixture
+def neural_decision_function(base_model_a2c):
+    return Neural(base_model_a2c)

@@ -15,7 +15,7 @@ from torch.multiprocessing import (
 )
 
 from pusoy.constants import DEVICE
-from pusoy.decision_function import TrainingDecisionFunction
+from pusoy.decision_module import TrainingNeural
 from pusoy.game import Game
 from pusoy.losses import ppo_loss, batch_generate_mask
 from pusoy.models import DenseA2C
@@ -41,7 +41,7 @@ def train(
     beta: float = 0.1,
     pool_size: int = 4,
     save_steps: int = 500,
-    checkpoint: str = None,
+    checkpoint: str | None = None,
     device: str = "cuda",
     model_dir=None,
 ):
@@ -232,7 +232,7 @@ def play_round_async(
     beta=0.1,
 ):
     decision_functions = [
-        TrainingDecisionFunction(model, device, beta) for model in models
+        TrainingNeural(model, device, beta) for model in models
     ]
     players = [Player(i, func) for i, func in enumerate(decision_functions)]
     game = Game(players)

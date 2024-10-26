@@ -69,7 +69,6 @@ class DenseA2C(PusoyModel):
         actor_x = torch.cat([actor_x, x], dim=-1)
         actor_x = F.relu(self.actor_2(actor_x))
         actor_out = self.actor_out(actor_x)
-        actor_out = torch.split(actor_out, OUTPUT_SIZES, dim=-1)
 
         return actor_out
 
