@@ -85,10 +85,14 @@ class Card:
         return int((self.value.value * 4) + self.suit.value)
 
 
-def idx_to_card(idx):
+def idx_to_card(idx: int) -> Card:
     value = idx // 4
     suit = idx % 4
     return Card(Value(value), Suit(suit))
+
+
+def card_to_idx(card: Card) -> int:
+    return card.value.value * 4 + card.suit.value
 
 
 class RoundType(Enum):
@@ -181,3 +185,8 @@ def indexes_to_one_hot(size: int, idxs: torch.Tensor | list):
     tensor = torch.zeros(size)
     tensor[idxs] = 1
     return tensor
+
+
+def card_names_to_card_list(names: list[str]) -> torch.Tensor:
+    cards = [string_to_card(name) for name in names]
+    return indexes_to_one_hot(52, [card_to_idx(c) for c in cards])

@@ -16,4 +16,5 @@ def selection_function_eval(probs: torch.Tensor, num_samples: int) -> torch.Tens
     Given a tensor of probabilities, return an ordered tensor of indices.
     During evaluation, the selection function is a maximum function.
     """
+    return torch.topk(probs, num_samples).indices
     return torch.topk(input=probs, k=num_samples)[1]

@@ -28,7 +28,7 @@ class Game:
         self.winner = None
 
         self.prev_player = Player(None, None)
-        self.prev_play = None
+        self.prev_play = torch.zeros(52)
         self.curr_player = self.player_queue.get()
         while not self.curr_player.cards[0]:
             self.rotate_player()
@@ -59,7 +59,7 @@ class Game:
                 print(f"Control is now with {self.curr_player}")
             for p in self.players:
                 p.passed = False
-            self.prev_play = None
+            self.prev_play = torch.zeros(52)
             self.round_type = RoundType.NONE
             self.hand_type = Hands.STRAIGHT
 
