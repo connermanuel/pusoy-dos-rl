@@ -7,59 +7,93 @@ from pusoy.models import PusoyModel
 
 
 def ppo_loss(
-    curr_model: PusoyModel,
-    prev_model: PusoyModel,
-    inputs: torch.Tensor,
-    adv: torch.Tensor,
-    batch_masks: tuple[torch.Tensor],
-    eps_clip: float = 0.1,
-    gamma: float = 0.99,
-    lambd: float = 0.9,
-    c_entropy: float = 0.001,
-    device: torch.device = DEVICE,
-) -> torch.Tensor:
+    curr_log_probs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    prev_log_probs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    state_values: torch.Tensor,
+    advantages: torch.Tensor,
+    action_masks: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    eps_clip: float = 0.2,
+    c_entropy: float = 0.01,
+) -> tuple[torch.Tensor, dict[str, float]]:
     """
-    Returns negated reward (positive action should have negative loss) of a batch of
-    inputs and actions. For a feed forward model we assume conditional independence.
-
-    The inputs and model should already be on the correct device.
+    Compute PPO loss with clipped objective for multi-part pusoy action space.
 
     Args:
-        curr_model: the current model
-        prev_model: the previous model
-        inputs: (batch_size, input_dim) the input to the model representing
-        the game state
-        adv: (batch_size) tensor of advantages at each timestep. The most basic version
-        is simply a 1 or -1/3 at the end of each game.
-        batch_masks: A tuple of three (batch_size, _) tensors that mask out
-            the cards, hands, and round
-        eps_clip: epsilon for clipping gradient update
-        gamma: discount factor for computing advantage estimate
-        c_entropy: weight of entropy term (higher alpha = more exploration)
-        device: device to perform operations on
-    
-    Returns:
-        A tensor corresponding to the PPO loss.
+        curr_log_probs: Tuple of (cards, hand_type, round_type) log probs
+        prev_log_probs: Tuple of old policy log probs
+        state_values: (batch_size,) Value predictions
+        advantages: (batch_size,) Advantage estimates
+        action_masks: Tuple of masks for each action part
+        eps_clip: PPO clip parameter
+        c_entropy: Entropy bonus coefficient
     """
-    output, state_values = curr_model.forward(inputs)
-    prev_output = prev_model.act(inputs)
-
-    log_probs: list[torch.Tensor] = [F.log_softmax(t, dim=-1) for t in output]
-    prev_log_probs: list[torch.Tensor] = [F.log_softmax(t, dim=-1) for t in prev_output]
-    ratios = [torch.exp(t - prev_t) for t, prev_t in zip(log_probs, prev_log_probs)]
-    ratios = [r * b for r, b in zip(ratios, batch_masks)]
-
-    critic_loss = F.mse_loss(state_values, state_values + adv)
-    surr1 = ratios * adv
-    surr2 = torch.clamp(ratios, 1 - eps_clip, 1 + eps_clip) * adv
-
-    objective = (
-        torch.min(surr1, surr2).mean()
-        - critic_loss
-        + c_entropy * entropy(log_probs, OUTPUT_SIZES)
+    # Input validation
+    assert len(curr_log_probs) == len(prev_log_probs) == len(action_masks) == 3
+    assert all(
+        c.shape[0] == p.shape[0] == advantages.shape[0]
+        for c, p in zip(curr_log_probs, prev_log_probs)
     )
 
-    return -objective
+    actor_losses = []
+    approx_kls = []
+
+    # Compute losses per action part
+    for curr_probs, prev_probs, mask in zip(
+        curr_log_probs, prev_log_probs, action_masks
+    ):
+        log_ratio = curr_probs - prev_probs
+        ratio = torch.exp(log_ratio) * mask
+
+        surr1 = ratio * advantages.unsqueeze(-1)
+        surr2 = torch.clamp(ratio, 1 - eps_clip, 1 + eps_clip) * advantages.unsqueeze(
+            -1
+        )
+
+        actor_losses.append(-torch.min(surr1, surr2).mean())
+        approx_kls.append(((ratio - 1) - log_ratio).mean().item())
+
+    # Combine losses
+    actor_loss = sum(actor_losses)
+    critic_loss = 0.5 * F.mse_loss(state_values, state_values + advantages)
+    entropy_loss = -c_entropy * sum(entropy(probs) for probs in curr_log_probs)
+
+    total_loss = actor_loss + critic_loss + entropy_loss
+
+    metrics = {
+        "actor_loss": actor_loss.item(),
+        "critic_loss": critic_loss.item(),
+        "entropy_loss": entropy_loss.item(),
+        "approx_kl": sum(approx_kls) / len(approx_kls),
+    }
+
+    return total_loss, metrics
+
+
+def split_and_compute_log_probs(
+    logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Split 62-dim logits tensor into three parts and compute log probabilities.
+    Concantenates the log probabilities of each part into a single tensor.
+
+    Args:
+        logits: (batch_size, 62) tensor
+
+    Returns:
+        Tuple of log probabilities for each part:
+        - (batch_size, 52) for first part
+        - (batch_size, 5) for second part
+        - (batch_size, 5) for third part
+    """
+    first_logits = logits[..., :52]
+    second_logits = logits[..., 52:57]
+    third_logits = logits[..., 57:]
+
+    first_log_probs = F.log_softmax(first_logits, dim=-1)
+    second_log_probs = F.log_softmax(second_logits, dim=-1)
+    third_log_probs = F.log_softmax(third_logits, dim=-1)
+
+    return first_log_probs, second_log_probs, third_log_probs
 
 
 def gae(
@@ -67,84 +101,99 @@ def gae(
     rewards: torch.Tensor,
     gamma: float = 0.99,
     lambd: float = 0.9,
-    device: torch.device = torch.device("cuda"),
 ) -> torch.Tensor:
     """
-    Computes the generalized advantage estimate over time for a specific
+    Computes the generalized advantage estimate over time for a player.
+    From the paper High-Dimensional Continuous Control Using Generalized Advantage Estimation
+    https://arxiv.org/abs/1506.02438
 
     Args:
         state_values: (seq_len,) tensor of state values
         rewards: (seq_len,) a reward tensor corresponding to reward after each action
             inside a game sequence
-        gamma:
-        lambd:
-        device:
+        gamma: Discount factor for future rewards
+        lambd: Trace decay factor
+        device: Device to perform operations on
     """
-    values_moved = torch.stack((state_values[1:].detach(), torch.zeros(1).to(device)))
-    target = rewards + (gamma * values_moved)
-    td_estimates = target - state_values
+    advantages = torch.empty(rewards.size(), device=rewards.device)
+    advantage = 0
+    next_value = 0
 
-    disc_factor = gamma * lambd
-    end = len(state_values)
-    matrix = torch.triu(
-        (disc_factor ** -(torch.arange(end))).reshape(-1, 1)
-        * (disc_factor ** (torch.arange(end))).reshape(1, -1)
-    ).to(device)
-    adv = matrix @ td_estimates
+    for i, (r, v) in reversed(list(enumerate(zip(rewards, state_values)))):
+        td_error = r + next_value * gamma - v
+        advantage = td_error + advantage * gamma * lambd
+        next_value = v
+        advantages[i] = advantage
 
-    return adv
+    return advantages
 
 
-def td(values, gamma, lambd, rewards, device, cum_lengths):
-    values_moved = torch.vstack((values[1:].detach(), torch.zeros((1, 1)).to(device)))
-    values_moved[cum_lengths - 1] = 0
-    target = rewards + (gamma * values_moved)
-    td_estimates = target - values
-    return td_estimates
+def td(
+    state_values: torch.Tensor,
+    rewards: torch.Tensor,
+    gamma: float = 0.99,
+    lambd: float = 0.9,
+) -> torch.Tensor:
+    """
+    Computes the temporal difference estimate over time for a player.
+
+    Args:
+        state_values: (seq_len,) tensor of state values
+        rewards: (seq_len,) a reward tensor corresponding to reward after each action
+            inside a game sequence
+        gamma: Discount factor for future rewards
+        lambd: Trace decay factor. Unused in TD.
+        device: Device to perform operations on
+    """
+    advantages = []
+    next_value = 0
+
+    for r, v in zip(reversed(rewards), reversed(state_values)):
+        advantage = r + next_value * gamma - v
+        next_value = v
+        advantages.insert(0, advantage)
+
+    return torch.tensor(advantages)
 
 
-def batch_generate_mask(actions: list[Action], device) -> torch.Tensor:
+def generate_action_masks(actions: list[Action]) -> torch.Tensor:
     """Creates a mask for the output tensors using a list of Action objects.
 
     Args:
         actions: A list of actions corresponding to a played game.
-        device: The device on which to place the batch mask.
 
     Returns:
-        A boolean tensor with shape (output_dim,) that masks out the relevant logits for the selected action.
+        Tuple of (cards_mask, hand_type_mask, round_type_mask)
     """
-    card_tensors, round_tensors, hand_tensors = tuple(
-        zip(
-            *[
-                (action.cards, action.type.to_tensor(), action.hand.to_tensor())
-                for action in actions
-            ]
-        )
-    )
-    card_tensors, round_tensors, hand_tensors = (
-        torch.stack(card_tensors),
-        torch.stack(round_tensors),
-        torch.stack(hand_tensors),
-    )
-    mask = torch.cat([card_tensors, round_tensors, hand_tensors], dim=1).to(device)
-    return mask
+    card_tensors = []
+    round_tensors = []
+    hand_tensors = []
+
+    for action in actions:
+        card_tensors.append(action.cards)
+
+        round_tensor = action.type.to_tensor(dtype=torch.float)
+        round_tensors.append(round_tensor)
+
+        hand_tensor = action.hand.to_tensor(dtype=torch.float)
+        hand_tensors.append(hand_tensor)
+
+    card_mask = torch.stack(card_tensors, dim=0)
+    round_mask = torch.stack(round_tensors, dim=0)
+    hand_mask = torch.stack(hand_tensors, dim=0)
+
+    return card_mask, round_mask, hand_mask
 
 
-def entropy(log_probs, softmax_sizes):
+def entropy(log_probs: torch.Tensor) -> torch.Tensor:
     """
-    Calculates entropy of the output batch-wise given the log probabilities.
+    Calculate entropy given log probabilities.
 
-    TO GET THE ENTROPY:
-    - https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/PPO.py#L104C9-L119C42
-    - entropy dist from constant var matrix and predicted action vectors
+    Args:
+        log_probs: (batch_size, action_dim) tensor of log probabilities
+
+    Returns:
+        (batch_size,) tensor of entropy values
     """
-    ptr = 0
-    lst = []
-    for size in softmax_sizes:
-        selected = log_probs[:, ptr : ptr + size]
-        probs = torch.exp(selected)
-        entropy = -torch.sum(selected * probs, dim=-1)
-        ptr += size
-        lst.append(entropy)
-
-    return torch.sum(torch.cat(lst, dim=-1), dim=-1)
+    probs = torch.exp(log_probs)
+    return -torch.sum(log_probs * probs, dim=-1)
